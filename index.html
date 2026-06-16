@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📄 ➜ 📝 Convertisseur Markdown</title>
+
+  <!-- CDN cdnjs.cloudflare.com — versions épinglées
+       SÉCURITÉ : Pour activer la vérification d'intégrité SRI, obtenez les hashes sur
+       https://www.srihash.org/ ou https://cdnjs.com (page de chaque lib) et ajoutez :
+         integrity="sha384-<HASH>" crossorigin="anonymous"
+       Exemple :
+         <script src="..." integrity="sha384-xxxx" crossorigin="anonymous"></script>
+  -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: mammoth introuvable')"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: turndown introuvable')"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: pdf.js introuvable')"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: SheetJS introuvable')"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: PapaParse introuvable')"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+          crossorigin="anonymous"
+          onerror="console.warn('CDN: JSZip introuvable')"></script>
+
+  <style>
+    :root {
+      --accent:   #2563eb;
+      --accent-h: #1d4ed8;
+      --ok:       #16a34a;
+      --warn:     #d97706;
+      --err:      #dc2626;
+      --bg:       #f8fafc;
+      --surface:  #ffffff;
+      --border:   #e2e8f0;
+      --text:     #1e293b;
+      --muted:    #64748b;
+      --radius:   10px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* L'attribut hidden doit TOUJOURS l'emporter sur les display: des classes
+       (.btn, .apercu-overlay, etc.) — sinon les éléments "cachés" restent visibles. */
+    [hidden] { display: none !important; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.5rem 1rem;
+    }
+    .app { max-width: 760px; margin: 0 auto; }
+
+    /* ---- En-tête ---- */
+    header { text-align: center; margin-bottom: 1.5rem; }
+    header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: .4rem; }
+    .confidentialite {
+      display: inline-flex; align-items: center; gap: .4rem;
+      background: #f0fdf4; color: var(--ok);
+      border: 1px solid #bbf7d0; border-radius: 20px;
+      font-size: .82rem; padding: .3rem .9rem;
+    }
+
+    /* ---- Bandeau avertissement CDN ---- */
+    .bandeau-cdn {
+      background: #fefce8; border: 1px solid #fde047;
+      border-radius: var(--radius); padding: .75rem 1rem;
+      font-size: .85rem; color: #854d0e; margin-bottom: 1rem;
+    }
+
+    /* ---- Zone de dépôt ---- */
+    .zone-depot {
+      border: 2.5px dashed var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .zone-depot:hover, .zone-depot.survol {
+      border-color: var(--accent);
+      background: #eff6ff;
+    }
+    .zone-depot input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .zone-depot-icone { font-size: 2.5rem; line-height: 1; margin-bottom: .5rem; }
+    .zone-depot-titre { font-size: 1.1rem; font-weight: 600; margin-bottom: .25rem; }
+    .zone-depot-sub   { font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
+    .zone-depot-sub span { color: var(--accent); text-decoration: underline; }
+    .formats-badge {
+      display: inline-block;
+      background: #f1f5f9; border-radius: 20px;
+      font-size: .75rem; color: var(--muted);
+      padding: .25rem .9rem; letter-spacing: .02em;
+    }
+
+    /* ---- Section journal ---- */
+    .journal-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-top: 1.25rem;
+      overflow: hidden;
+    }
+    .journal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+    }
+    .journal-header h2 { font-size: .95rem; font-weight: 600; }
+    .journal-actions { display: flex; gap: .5rem; }
+    .journal-liste { list-style: none; padding: 0; }
+    .journal-item {
+      display: flex; align-items: flex-start; gap: .75rem;
+      padding: .7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: .88rem;
+      transition: background .15s;
+    }
+    .journal-item:last-child { border-bottom: none; }
+    .journal-item:hover { background: #f8fafc; }
+    .journal-icone { font-size: 1rem; flex-shrink: 0; margin-top: .05rem; }
+    .journal-corps { flex: 1; min-width: 0; }
+    .journal-nom {
+      font-weight: 600; color: var(--accent);
+      cursor: pointer; text-decoration: none;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      display: block;
+    }
+    .journal-nom:hover { text-decoration: underline; }
+    .journal-nom.non-cliquable { color: var(--text); cursor: default; pointer-events: none; }
+    .journal-msg { color: var(--muted); margin-top: .1rem; }
+    .journal-item.en-cours .journal-msg { color: var(--warn); }
+    .journal-item.ok    .journal-icone { color: var(--ok);   }
+    .journal-item.warn  .journal-icone { color: var(--warn); }
+    .journal-item.err   .journal-icone { color: var(--err);  }
+    .journal-actions-item { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
+
+    /* ---- Boutons ---- */
+    .btn {
+      display: inline-flex; align-items: center; gap: .3rem;
+      border: none; border-radius: 6px;
+      padding: .4rem .85rem; font-size: .82rem; font-weight: 500;
+      cursor: pointer; transition: background .15s, opacity .15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .4; cursor: default; }
+    .btn-primaire  { background: var(--accent); color: #fff; }
+    .btn-primaire:hover:not(:disabled) { background: var(--accent-h); }
+    .btn-secondaire { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
+    .btn-secondaire:hover:not(:disabled) { background: #e2e8f0; }
+    .btn-petit { font-size: .78rem; padding: .25rem .6rem; }
+
+    /* ---- Aperçu overlay ---- */
+    .apercu-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.45);
+      z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .apercu-panel {
+      background: var(--surface);
+      border-radius: var(--radius);
+      width: 100%; max-width: 760px;
+      max-height: 85vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,.2);
+    }
+    .apercu-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      gap: .5rem;
+    }
+    .apercu-titre { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .apercu-header-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+    .apercu-contenu {
+      flex: 1; overflow: auto;
+      padding: 1rem; font-size: .82rem;
+      font-family: 'Consolas', 'Fira Mono', monospace;
+      line-height: 1.6; white-space: pre-wrap;
+      color: var(--text);
+    }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 480px) {
+      header h1 { font-size: 1.25rem; }
+      .zone-depot { padding: 1.75rem .75rem; }
+      .journal-header { flex-direction: column; align-items: flex-start; gap: .5rem; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- En-tête -->
+  <header>
+    <h1>📄 ➜ 📝 Convertisseur Markdown</h1>
+    <p class="confidentialite">🔒 Vos fichiers ne quittent jamais votre appareil — conversion 100 % locale</p>
+  </header>
+
+  <!-- Bandeau CDN (masqué par défaut) -->
+  <div id="bandeau-cdn" class="bandeau-cdn" hidden></div>
+
+  <!-- Zone de dépôt -->
+  <div class="zone-depot" id="zone-depot"
+       role="button" tabindex="0"
+       aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
+    <input type="file" id="input-fichiers" multiple
+           accept=".pdf,.docx,.doc,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.txt,.html,.htm"
+           aria-hidden="true" tabindex="-1">
+    <div class="zone-depot-icone">⬇️</div>
+    <p class="zone-depot-titre">Glissez vos fichiers ici</p>
+    <p class="zone-depot-sub">ou <span>cliquez pour choisir</span></p>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · HTML · TXT</span>
+  </div>
+
+  <!-- Section journal -->
+  <section class="journal-section" id="journal-section" hidden>
+    <div class="journal-header">
+      <h2>Journal de conversion</h2>
+      <div class="journal-actions">
+        <button class="btn btn-primaire" id="btn-zip" hidden aria-label="Télécharger tous les fichiers convertis en ZIP">
+          <span aria-hidden="true">⬇️</span> Tout télécharger (.zip)
+        </button>
+        <button class="btn btn-secondaire" id="btn-vider" aria-label="Vider le journal">
+          <span aria-hidden="true">🗑️</span> Vider
+        </button>
+      </div>
+    </div>
+    <ul class="journal-liste" id="journal" aria-live="polite" aria-label="Journal de conversion"></ul>
+  </section>
+
+</div>
+
+<!-- Overlay aperçu -->
+<div class="apercu-overlay" id="apercu-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="apercu-titre">
+  <div class="apercu-panel">
+    <div class="apercu-header">
+      <span class="apercu-titre" id="apercu-titre"></span>
+      <div class="apercu-header-actions">
+        <button class="btn btn-secondaire btn-petit" id="btn-copier"><span aria-hidden="true">📋</span> Copier</button>
+        <button class="btn btn-secondaire btn-petit" id="btn-fermer-apercu"><span aria-hidden="true">✖</span> Fermer</button>
+      </div>
+    </div>
+    <pre class="apercu-contenu" id="apercu-contenu" tabindex="0"></pre>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// =====================================================================
+// SECTION 1 : CONFIG
+// =====================================================================
+const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
+const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
+
+// Messages pour les formats refusés
+const FORMATS_REFUSES = {
+  '.doc': 'Format Word ancien (.doc) non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
+  '.ppt': 'Format PowerPoint ancien (.ppt) non pris en charge. Ouvrez dans PowerPoint et enregistrez en .pptx, puis recommencez.',
+  '.odt': 'Format OpenDocument texte. Ouvrez dans LibreOffice Writer et enregistrez en .docx, puis recommencez.',
+  '.odp': 'Format OpenDocument présentation. Ouvrez dans LibreOffice Impress et enregistrez en .pptx, puis recommencez.',
+  '.rtf': 'Format RTF non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
+};
+
+// Registre des convertisseurs (construit après chargement des bibliothèques)
+let CONVERTISSEURS = {};
+
+// Résultats en mémoire [{nom, md, statut}]
+let resultats = [];
+
+// =====================================================================
+// SECTION 2 : UTILITAIRES
+// =====================================================================
+const extOf = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+
+const baseName = nom => nom.replace(/\.[^.]+$/, '');
+
+function lireCommeArrayBuffer(fichier) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('Impossible de lire le fichier.'));
+    reader.readAsArrayBuffer(fichier);
+  });
+}
+
+function ecapperCellule(s) {
+  return String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>').replace(/\r/g, '').trim();
+}
+
+function construireTableMd(rows) {
+  if (!rows || !rows.length) return '_(vide)_';
+  // reduce au lieu de Math.max(...spread) : ce dernier plante au-delà de ~100k lignes
+  // (dépassement de la pile d'appels). Crucial pour les gros exports Excel/CSV.
+  const nbCols = rows.reduce((m, r) => r.length > m ? r.length : m, 0);
+  const pad = r => { const c = [...r]; while (c.length < nbCols) c.push(''); return c; };
+  const toRow = r => '| ' + pad(r).map(ecapperCellule).join(' | ') + ' |';
+  const sep   = '|' + Array(nbCols).fill(' --- ').join('|') + '|';
+  return [toRow(rows[0]), sep, ...rows.slice(1).map(toRow)].join('\n');
+}
+
+function telechargerBlob(contenu, nom) {
+  const blob = new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: nom });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s : suffisant même pour fichiers lourds
+}
+
+// Détecte l'encodage d'un ArrayBuffer (BOM UTF-8/UTF-16, sinon fallback Latin-1)
+// Crucial pour les exports Excel français (Windows-1252) et les fichiers anciens
+function detecterEtDecoder(ab) {
+  const bytes = new Uint8Array(ab);
+  // BOM UTF-8 : EF BB BF
+  if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+    return new TextDecoder('utf-8').decode(ab);
+  }
+  // BOM UTF-16 LE : FF FE
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+    return new TextDecoder('utf-16le').decode(ab);
+  }
+  // BOM UTF-16 BE : FE FF
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+    return new TextDecoder('utf-16be').decode(ab);
+  }
+  // Tenter UTF-8 strict ; si échec → Latin-1 (windows-1252 compatible)
+  try {
+    const td = new TextDecoder('utf-8', { fatal: true });
+    return td.decode(ab);
+  } catch {
+    return new TextDecoder('windows-1252').decode(ab);
+  }
+}
+
+function desescaperXml(s) {
+  return s
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"');
+}
+
+// =====================================================================
+// SECTION 3 : CONVERTISSEURS
+// =====================================================================
+
+// Crée une instance TurndownService configurée avec support des tableaux
+function creerTurndown() {
+  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
+
+  // Cellules
+  td.addRule('tableCell', {
+    filter: ['th', 'td'],
+    replacement: content => ' ' + content.trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ') + ' |'
+  });
+  // Lignes
+  td.addRule('tableRow', {
+    filter: 'tr',
+    replacement: (content, node) => {
+      const isHeader = node.parentNode.nodeName === 'THEAD' || node.rowIndex === 0;
+      let row = '|' + content + '\n';
+      if (isHeader) row += '|' + Array.from(node.cells).map(() => ' --- ').join('|') + '|\n';
+      return row;
+    }
+  });
+  // Sections de tableau
+  td.addRule('tableSection', { filter: ['thead', 'tbody', 'tfoot'], replacement: c => c });
+  // Tableau global
+  td.addRule('table', { filter: 'table', replacement: c => '\n\n' + c.trim() + '\n\n' });
+
+  return td;
+}
+
+// .docx → Markdown (mammoth + Turndown)
+async function convDocx(ab) {
+  const res = await mammoth.convertToHtml({ arrayBuffer: ab });
+  return creerTurndown().turndown(res.value);
+}
+
+// .pdf → Markdown (PDF.js, extraction texte par page)
+async function convPdf(ab, nom) {
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
+  const pdf  = await loadingTask.promise;
+  const blocs = [`# ${baseName(nom)}\n`];
+  let totalChars = 0;
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page   = await pdf.getPage(pageNum);
+    const tc     = await page.getTextContent();
+
+    // Regrouper les items par position Y (tolérance 2 unités)
+    const carte = new Map();
+    for (const item of tc.items) {
+      const y = Math.round(item.transform[5] / 2) * 2;
+      if (!carte.has(y)) carte.set(y, []);
+      carte.get(y).push({ x: item.transform[4], t: item.str });
+    }
+
+    // Trier Y décroissant (haut → bas de la page)
+    const lignes = [...carte.keys()]
+      .sort((a, b) => b - a)
+      .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(i => i.t).join(' ').trim())
+      .filter(l => l.length > 0);
+
+    totalChars += lignes.join('').length;
+    blocs.push(`\n---\n\n## Page ${pageNum}\n\n${lignes.join('\n')}`);
+  }
+
+  const md = blocs.join('').trim() + '\n';
+
+  // Détecter un PDF scanné
+  if (totalChars < SEUIL_PDF_SCAN) {
+    return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
+  }
+
+  return md;
+}
+
+// .xlsx / .xls / .ods → Markdown (SheetJS)
+async function convTableur(ab, nom) {
+  const wb    = XLSX.read(ab, { type: 'buffer' });
+  const blocs = [`# ${baseName(nom)}\n`];
+
+  for (const sheetName of wb.SheetNames) {
+    const ws   = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    blocs.push(`\n## Feuille : ${sheetName}\n`);
+    blocs.push(rows.length ? construireTableMd(rows.map(r => r.map(String))) : '_(feuille vide)_');
+  }
+  return blocs.join('\n') + '\n';
+}
+
+// .csv / .tsv → Markdown (PapaParse)
+async function convCsv(ab, nom) {
+  const texte  = detecterEtDecoder(ab);
+  const sep    = extOf(nom) === '.tsv' ? '\t' : '';
+  const result = Papa.parse(texte, { delimiter: sep, skipEmptyLines: true, header: false });
+  const rows   = result.data;
+  if (!rows.length) return `# ${baseName(nom)}\n\n_(fichier vide)_\n`;
+  return `# ${baseName(nom)}\n\n${construireTableMd(rows.map(r => r.map(String)))}\n`;
+}
+
+// .pptx → Markdown (JSZip + parsing XML)
+async function convPptx(ab, nom) {
+  const zip = await JSZip.loadAsync(ab);
+
+  const slideKeys = Object.keys(zip.files)
+    .filter(p => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
+    .sort((a, b) => {
+      const na = parseInt((a.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
+      const nb = parseInt((b.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
+      return na - nb;
+    });
+
+  if (!slideKeys.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
+
+  const blocs = [`# ${baseName(nom)}\n`];
+
+  for (let i = 0; i < slideKeys.length; i++) {
+    const xml  = await zip.files[slideKeys[i]].async('text');
+    blocs.push(`\n## Diapositive ${i + 1}\n`);
+
+    const paragraphes = xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
+    for (const para of paragraphes) {
+      const textes = [...para.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map(m => desescaperXml(m[1]));
+      const ligne  = textes.join('').trim();
+      if (ligne) blocs.push(`- ${ligne}`);
+    }
+  }
+
+  return blocs.join('\n') + '\n';
+}
+
+// .txt → Markdown
+async function convTxt(ab, nom) {
+  const texte = detecterEtDecoder(ab);
+  return `# ${baseName(nom)}\n\n${texte.trim()}\n`;
+}
+
+// .html / .htm → Markdown (Turndown)
+async function convHtml(ab) {
+  const texte = detecterEtDecoder(ab);
+  const doc   = new DOMParser().parseFromString(texte, 'text/html');
+  // Retirer le code non visible : son contenu textuel polluerait le Markdown
+  doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+  return creerTurndown().turndown(doc.body.innerHTML);
+}
+
+// =====================================================================
+// SECTION 4 : ORCHESTRATEUR
+// =====================================================================
+async function traiterFichiers(fileList) {
+  for (const fichier of Array.from(fileList)) {
+    await traiterUnFichier(fichier);
+  }
+  mettreAJourBoutonZip();
+}
+
+async function traiterUnFichier(fichier) {
+  const nom    = fichier.name;
+  const ext    = extOf(nom);
+  const nomMd  = baseName(nom) + '.md';
+  const id     = 'item-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+
+  // 1. Format refusé ?
+  if (FORMATS_REFUSES[ext]) {
+    ajouterLigne({ id, icone: '❌', nom, statut: 'err', msg: FORMATS_REFUSES[ext], cliquable: false });
+    return;
+  }
+
+  // 2. Convertisseur disponible ?
+  if (!CONVERTISSEURS[ext]) {
+    ajouterLigne({ id, icone: '❌', nom, statut: 'err', msg: `Format non pris en charge : ${ext || '(sans extension)'}`, cliquable: false });
+    return;
+  }
+
+  // 3. Avertissement taille
+  if (fichier.size > SEUIL_ALERTE_TAILLE) {
+    ajouterLigne({ id, icone: '⏳', nom, statut: 'en-cours', msg: `⚠️ Fichier volumineux (${(fichier.size / 1024 / 1024).toFixed(0)} Mo), conversion en cours…`, cliquable: false });
+  } else {
+    ajouterLigne({ id, icone: '⏳', nom, statut: 'en-cours', msg: 'Conversion en cours…', cliquable: false });
+  }
+
+  // 4. Conversion
+  try {
+    const ab = await lireCommeArrayBuffer(fichier);
+    const md = await CONVERTISSEURS[ext](ab, nom);
+
+    // Détecter alerte scan PDF
+    const estScan = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
+    resultats.push({ nom, nomMd, md });
+
+    mettreAJourLigne(id, {
+      icone:    estScan ? '⚠️' : '✅',
+      statut:   estScan ? 'warn' : 'ok',
+      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${nomMd}`,
+      md,
+      cliquable: true,
+    });
+  } catch (err) {
+    mettreAJourLigne(id, { icone: '❌', statut: 'err', msg: `Erreur : ${err.message}`, cliquable: false });
+  }
+}
+
+// =====================================================================
+// SECTION 5 : UI
+// =====================================================================
+let journalSection, journalListe, btnZip, btnVider, apercuOverlay, apercuTitre, apercuContenu;
+
+function initUI() {
+  journalSection = document.getElementById('journal-section');
+  journalListe   = document.getElementById('journal');
+  btnZip         = document.getElementById('btn-zip');
+  btnVider       = document.getElementById('btn-vider');
+  apercuOverlay  = document.getElementById('apercu-overlay');
+  apercuTitre    = document.getElementById('apercu-titre');
+  apercuContenu  = document.getElementById('apercu-contenu');
+
+  const zone  = document.getElementById('zone-depot');
+  const input = document.getElementById('input-fichiers');
+
+  // Drag & drop — compteur pour éviter le clignotement sur les éléments enfants
+  let compteurDrag = 0;
+  zone.addEventListener('dragenter', e => { e.preventDefault(); compteurDrag++; zone.classList.add('survol'); });
+  zone.addEventListener('dragleave', () => { if (--compteurDrag <= 0) { compteurDrag = 0; zone.classList.remove('survol'); } });
+  zone.addEventListener('dragover',  e => { e.preventDefault(); });
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    compteurDrag = 0;
+    zone.classList.remove('survol');
+    if (e.dataTransfer.files.length) traiterFichiers(e.dataTransfer.files);
+  });
+
+  // Clic clavier (Entrée / Espace)
+  zone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+  });
+
+  // Sélecteur de fichiers
+  input.addEventListener('change', () => {
+    if (input.files.length) { traiterFichiers(input.files); input.value = ''; }
+  });
+
+  // Bouton ZIP
+  btnZip.addEventListener('click', genererZip);
+
+  // Bouton Vider
+  btnVider.addEventListener('click', () => {
+    journalListe.innerHTML = '';
+    resultats = [];
+    journalSection.hidden = true;
+    btnZip.hidden = true;
+  });
+
+  // Fermer aperçu
+  document.getElementById('btn-fermer-apercu').addEventListener('click', fermerApercu);
+  apercuOverlay.addEventListener('click', e => { if (e.target === apercuOverlay) fermerApercu(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { fermerApercu(); return; }
+    // Focus trap dans la modale quand elle est ouverte (WCAG 2.4.3)
+    if (e.key === 'Tab' && !apercuOverlay.hidden) {
+      const focusables = [...apercuOverlay.querySelectorAll('button, [tabindex="0"]')].filter(el => !el.disabled);
+      if (!focusables.length) return;
+      const premier = focusables[0], dernier = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === premier) { e.preventDefault(); dernier.focus(); }
+      else if (!e.shiftKey && document.activeElement === dernier) { e.preventDefault(); premier.focus(); }
+    }
+  });
+
+  document.getElementById('btn-copier').addEventListener('click', () => {
+    const texte = apercuContenu.textContent;
+    const btn   = document.getElementById('btn-copier');
+    const ok = () => { btn.textContent = '✅ Copié !'; setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000); };
+    // Clipboard API (HTTPS) ; fallback execCommand pour contextes locaux (file://)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texte).then(ok).catch(() => {
+        try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Erreur copie'; }
+      });
+    } else {
+      // Fallback : sélectionner le texte dans le <pre>
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(apercuContenu);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Copie manuelle'; }
+    }
+  });
+
+  verifierBibliotheques();
+}
+
+// ---- Journal helpers ----
+function ajouterLigne({ id, icone, nom, statut, msg, cliquable }) {
+  journalSection.hidden = false;
+
+  // Construction DOM sécurisée (pas d'innerHTML avec données externes → pas de XSS)
+  const li      = document.createElement('li');
+  li.className  = `journal-item ${statut}`;
+  li.id         = id;
+
+  const spanIcone = document.createElement('span');
+  spanIcone.className = 'journal-icone';
+  spanIcone.setAttribute('aria-hidden', 'true');
+  spanIcone.textContent = icone;
+
+  const divCorps = document.createElement('div');
+  divCorps.className = 'journal-corps';
+
+  const spanNom = document.createElement('span');
+  spanNom.className = 'journal-nom' + (cliquable ? '' : ' non-cliquable');
+  spanNom.title = nom;
+  spanNom.textContent = nom;
+
+  const divMsg = document.createElement('div');
+  divMsg.className = 'journal-msg';
+  divMsg.textContent = msg;
+
+  divCorps.appendChild(spanNom);
+  divCorps.appendChild(divMsg);
+  li.appendChild(spanIcone);
+  li.appendChild(divCorps);
+  journalListe.appendChild(li);
+}
+
+function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
+  const li = document.getElementById(id);
+  if (!li) return;
+
+  li.className = `journal-item ${statut}`;
+  li.querySelector('.journal-icone').textContent = icone;
+  li.querySelector('.journal-msg').textContent   = msg;
+
+  const nomSpan = li.querySelector('.journal-nom');
+  if (cliquable && md) {
+    nomSpan.classList.remove('non-cliquable');
+    const nomFichier = nomSpan.title;
+    const nomMd      = baseName(nomFichier) + '.md';
+
+    // Boutons d'action sous le message (construction DOM sécurisée)
+    const actions = document.createElement('div');
+    actions.className = 'journal-actions-item';
+
+    const btnDl = document.createElement('button');
+    btnDl.className = 'btn btn-secondaire btn-petit';
+    btnDl.textContent = '⬇️ Télécharger';
+    btnDl.addEventListener('click', () => telechargerBlob(md, nomMd));
+
+    const btnPrev = document.createElement('button');
+    btnPrev.className = 'btn btn-secondaire btn-petit';
+    btnPrev.textContent = '👁️ Aperçu';
+    btnPrev.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+
+    actions.appendChild(btnDl);
+    actions.appendChild(btnPrev);
+
+    li.querySelector('.journal-corps').appendChild(actions);
+
+    // Clic sur le nom → aperçu
+    nomSpan.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+  } else {
+    nomSpan.classList.add('non-cliquable');
+  }
+}
+
+function mettreAJourBoutonZip() {
+  const nbOk = resultats.length;
+  btnZip.hidden = nbOk < 2;
+}
+
+// ---- Aperçu ----
+function ouvrirApercu(nom, md) {
+  apercuTitre.textContent   = baseName(nom) + '.md';
+  apercuContenu.textContent = md;
+  apercuOverlay.hidden = false;
+  apercuContenu.focus();
+}
+
+function fermerApercu() {
+  apercuOverlay.hidden = true;
+}
+
+// ---- ZIP ----
+async function genererZip() {
+  if (!resultats.length) return;
+  const zip    = new JSZip();
+  const noms   = new Set();
+
+  for (const { nom, md } of resultats) {
+    let candidat = baseName(nom) + '.md';
+    let n = 2;
+    while (noms.has(candidat)) { candidat = `${baseName(nom)}_${n++}.md`; }
+    noms.add(candidat);
+    zip.file(candidat, md);
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: 'conversions_markdown.zip' });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s
+}
+
+// ---- Vérification bibliothèques ----
+function verifierBibliotheques() {
+  const manquantes = [];
+  if (!window.mammoth)         manquantes.push('mammoth → .docx');
+  if (!window.TurndownService) manquantes.push('Turndown → .docx/.html');
+  if (!window.pdfjsLib)        manquantes.push('PDF.js → .pdf');
+  if (!window.XLSX)            manquantes.push('SheetJS → .xlsx/.xls');
+  if (!window.Papa)            manquantes.push('PapaParse → .csv/.tsv');
+  if (!window.JSZip)           manquantes.push('JSZip → .pptx / .zip');
+
+  if (manquantes.length) {
+    const b = document.getElementById('bandeau-cdn');
+    b.textContent = '⚠️ Connexion internet requise au premier chargement des composants. Formats indisponibles : ' + manquantes.join(', ') + '.';
+    b.hidden = false;
+  }
+
+  // Construire le registre CONVERTISSEURS selon les libs disponibles
+  CONVERTISSEURS = {};
+  if (window.mammoth && window.TurndownService) CONVERTISSEURS['.docx'] = convDocx;
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+    CONVERTISSEURS['.pdf'] = convPdf;
+  }
+  if (window.XLSX) {
+    CONVERTISSEURS['.xlsx'] = convTableur;
+    CONVERTISSEURS['.xls']  = convTableur;
+    CONVERTISSEURS['.ods']  = convTableur;
+  }
+  if (window.Papa) {
+    CONVERTISSEURS['.csv'] = convCsv;
+    CONVERTISSEURS['.tsv'] = convCsv;
+  }
+  if (window.JSZip) {
+    CONVERTISSEURS['.pptx'] = convPptx;
+  }
+  // Toujours disponibles
+  CONVERTISSEURS['.txt'] = convTxt;
+  if (window.TurndownService) {
+    CONVERTISSEURS['.html'] = convHtml;
+    CONVERTISSEURS['.htm']  = convHtml;
+  }
+}
+
+// ---- Point d'entrée ----
+document.addEventListener('DOMContentLoaded', initUI);
+</script>
+</body>
+</html>
