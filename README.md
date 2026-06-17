@@ -2,13 +2,13 @@
 
 Un convertisseur universel de fichiers bureautiques en Markdown (.md) — **100 % local, sans installation, sans serveur.**
 
-🔗 **[Utiliser l'application →](https://brissonjo-sudo.github.io/convertisseur-to-markdown/)**
+🔗 **[Utiliser l'application →](https://brissonjo-sudo.github.io/convert-to-markdown/)**
 
 ---
 
 ## ✨ Comment l'utiliser
 
-1. **Ouvrez** [le lien ci-dessus](https://brissonjo-sudo.github.io/convertisseur-to-markdown/) dans votre navigateur
+1. **Ouvrez** [le lien ci-dessus](https://brissonjo-sudo.github.io/convert-to-markdown/) dans votre navigateur
 2. **Glissez** vos fichiers dans la zone de dépôt (ou cliquez pour les sélectionner)
 3. **Récupérez** vos `.md` — un par un, ou tous en `.zip`
 
