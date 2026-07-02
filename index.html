@@ -12,22 +12,26 @@
        Exemple :
          <script src="..." integrity="sha384-xxxx" crossorigin="anonymous"></script>
   -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <!-- defer : les bibliothèques (~1 Mo) se chargent en parallèle sans bloquer le
+       premier affichage ; verifierBibliotheques() tourne sur DOMContentLoaded,
+       qui n'est déclenché qu'après leur exécution. -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: mammoth introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: turndown introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: pdf.js introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: SheetJS introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: PapaParse introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: JSZip introuvable')"></script>
 
@@ -268,6 +272,7 @@
 const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
 const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
+const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultanément
 
 // Messages pour les formats refusés
 const FORMATS_REFUSES = {
@@ -292,6 +297,11 @@ const extOf = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 const baseName = nom => nom.replace(/\.[^.]+$/, '');
 
 function lireCommeArrayBuffer(fichier) {
+  // API moderne, sans passer par les événements FileReader
+  if (typeof fichier.arrayBuffer === 'function') {
+    return fichier.arrayBuffer().catch(() => { throw new Error('Impossible de lire le fichier.'); });
+  }
+  // Repli pour les navigateurs anciens
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload  = e => resolve(e.target.result);
@@ -362,8 +372,11 @@ function desescaperXml(s) {
 // SECTION 3 : CONVERTISSEURS
 // =====================================================================
 
-// Crée une instance TurndownService configurée avec support des tableaux
+// Instance TurndownService partagée (les règles sont statiques, l'instance est
+// réutilisable : inutile de la reconstruire à chaque fichier)
+let turndownPartage = null;
 function creerTurndown() {
+  if (turndownPartage) return turndownPartage;
   const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 
   // Cellules
@@ -386,6 +399,7 @@ function creerTurndown() {
   // Tableau global
   td.addRule('table', { filter: 'table', replacement: c => '\n\n' + c.trim() + '\n\n' });
 
+  turndownPartage = td;
   return td;
 }
 
@@ -399,51 +413,65 @@ async function convDocx(ab) {
 async function convPdf(ab, nom) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
   const pdf  = await loadingTask.promise;
-  const blocs = [`# ${baseName(nom)}\n`];
-  let totalChars = 0;
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page   = await pdf.getPage(pageNum);
-    const tc     = await page.getTextContent();
+  try {
+    // Extraire toutes les pages en parallèle (le worker PDF.js pipeline les
+    // requêtes) plutôt qu'en attendant chaque page l'une après l'autre.
+    const contenus = await Promise.all(
+      Array.from({ length: pdf.numPages }, (_, i) =>
+        pdf.getPage(i + 1).then(page => page.getTextContent())
+      )
+    );
 
-    // Regrouper les items par position Y (tolérance 2 unités)
-    const carte = new Map();
-    for (const item of tc.items) {
-      const y = Math.round(item.transform[5] / 2) * 2;
-      if (!carte.has(y)) carte.set(y, []);
-      carte.get(y).push({ x: item.transform[4], t: item.str });
+    const blocs = [`# ${baseName(nom)}\n`];
+    let totalChars = 0;
+
+    contenus.forEach((tc, i) => {
+      // Regrouper les items par position Y (tolérance 2 unités)
+      const carte = new Map();
+      for (const item of tc.items) {
+        const y = Math.round(item.transform[5] / 2) * 2;
+        if (!carte.has(y)) carte.set(y, []);
+        carte.get(y).push({ x: item.transform[4], t: item.str });
+      }
+
+      // Trier Y décroissant (haut → bas de la page)
+      const lignes = [...carte.keys()]
+        .sort((a, b) => b - a)
+        .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(it => it.t).join(' ').trim())
+        .filter(l => l.length > 0);
+
+      totalChars += lignes.join('').length;
+      blocs.push(`\n---\n\n## Page ${i + 1}\n\n${lignes.join('\n')}`);
+    });
+
+    // Détecter un PDF scanné
+    if (totalChars < SEUIL_PDF_SCAN) {
+      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
     }
 
-    // Trier Y décroissant (haut → bas de la page)
-    const lignes = [...carte.keys()]
-      .sort((a, b) => b - a)
-      .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(i => i.t).join(' ').trim())
-      .filter(l => l.length > 0);
-
-    totalChars += lignes.join('').length;
-    blocs.push(`\n---\n\n## Page ${pageNum}\n\n${lignes.join('\n')}`);
+    return blocs.join('').trim() + '\n';
+  } finally {
+    // Libérer le document côté worker : sans cela, chaque PDF converti
+    // reste en mémoire jusqu'à la fermeture de l'onglet.
+    loadingTask.destroy();
   }
-
-  const md = blocs.join('').trim() + '\n';
-
-  // Détecter un PDF scanné
-  if (totalChars < SEUIL_PDF_SCAN) {
-    return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
-  }
-
-  return md;
 }
 
 // .xlsx / .xls / .ods → Markdown (SheetJS)
 async function convTableur(ab, nom) {
-  const wb    = XLSX.read(ab, { type: 'buffer' });
+  // cellHTML/cellFormula désactivés : seules les valeurs affichées nous
+  // intéressent — moins de travail de parsing et de mémoire sur les gros classeurs.
+  const wb    = XLSX.read(ab, { type: 'buffer', cellHTML: false, cellFormula: false });
   const blocs = [`# ${baseName(nom)}\n`];
 
   for (const sheetName of wb.SheetNames) {
     const ws   = wb.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     blocs.push(`\n## Feuille : ${sheetName}\n`);
-    blocs.push(rows.length ? construireTableMd(rows.map(r => r.map(String))) : '_(feuille vide)_');
+    // construireTableMd convertit déjà chaque cellule en chaîne : pas besoin
+    // de dupliquer toutes les lignes avec un .map(String) préalable.
+    blocs.push(rows.length ? construireTableMd(rows) : '_(feuille vide)_');
   }
   return blocs.join('\n') + '\n';
 }
@@ -455,7 +483,7 @@ async function convCsv(ab, nom) {
   const result = Papa.parse(texte, { delimiter: sep, skipEmptyLines: true, header: false });
   const rows   = result.data;
   if (!rows.length) return `# ${baseName(nom)}\n\n_(fichier vide)_\n`;
-  return `# ${baseName(nom)}\n\n${construireTableMd(rows.map(r => r.map(String)))}\n`;
+  return `# ${baseName(nom)}\n\n${construireTableMd(rows)}\n`;
 }
 
 // .pptx → Markdown (JSZip + parsing XML)
@@ -472,10 +500,12 @@ async function convPptx(ab, nom) {
 
   if (!slideKeys.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
 
+  // Décompresser toutes les diapositives en parallèle plutôt qu'une par une
+  const xmls  = await Promise.all(slideKeys.map(k => zip.files[k].async('text')));
   const blocs = [`# ${baseName(nom)}\n`];
 
-  for (let i = 0; i < slideKeys.length; i++) {
-    const xml  = await zip.files[slideKeys[i]].async('text');
+  for (let i = 0; i < xmls.length; i++) {
+    const xml = xmls[i];
     blocs.push(`\n## Diapositive ${i + 1}\n`);
 
     const paragraphes = xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
@@ -508,9 +538,18 @@ async function convHtml(ab) {
 // SECTION 4 : ORCHESTRATEUR
 // =====================================================================
 async function traiterFichiers(fileList) {
-  for (const fichier of Array.from(fileList)) {
-    await traiterUnFichier(fichier);
-  }
+  // Pool de conversion : jusqu'à N fichiers en parallèle au lieu d'un par un.
+  // Chaque travailleur pioche le fichier suivant dès qu'il a fini le sien,
+  // donc les lignes du journal apparaissent dans l'ordre de dépôt.
+  const fichiers = Array.from(fileList);
+  let prochain = 0;
+  const travailleur = async () => {
+    while (prochain < fichiers.length) {
+      await traiterUnFichier(fichiers[prochain++]);
+    }
+  };
+  const nbTravailleurs = Math.min(CONVERSIONS_MAX_PARALLELES, fichiers.length);
+  await Promise.all(Array.from({ length: nbTravailleurs }, travailleur));
   mettreAJourBoutonZip();
 }
 

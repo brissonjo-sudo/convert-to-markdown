@@ -49,7 +49,8 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 ## 🔧 Fonctionnalités
 
 - ✅ **Glisser-déposer multi-fichiers** ou sélecteur classique
-- ✅ **Conversion par lot** — traitez plusieurs fichiers en une fois
+- ✅ **Conversion par lot en parallèle** — jusqu'à 4 fichiers traités simultanément
+- ✅ **Affichage instantané** — les bibliothèques se chargent en arrière-plan sans bloquer la page
 - ✅ **Téléchargement individuel** ou archive `.zip` complète
 - ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement
 - ✅ **Copier dans le presse-papiers** d'un clic
