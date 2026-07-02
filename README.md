@@ -42,7 +42,7 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
 - **PDF scannés (image)** : aucun texte ne peut être extrait sans **OCR**. Un avertissement est ajouté au fichier produit. Pour traiter ces PDF, utilisez d'abord un outil OCR (Adobe Acrobat, ilovepdf.com, Tesseract…).
-- **Connexion internet requise au premier chargement** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com`. Elles sont ensuite mises en cache par votre navigateur — l'outil fonctionne hors-ligne après cette première fois.
+- **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com`. Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
 
 ---
 
@@ -51,6 +51,8 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 - ✅ **Glisser-déposer multi-fichiers** ou sélecteur classique
 - ✅ **Conversion par lot en parallèle** — jusqu'à 4 fichiers traités simultanément
 - ✅ **Affichage instantané** — les bibliothèques se chargent en arrière-plan sans bloquer la page
+- ✅ **Interface qui ne gèle jamais** — les conversions lourdes (Excel, CSV, PowerPoint) tournent dans un Web Worker
+- ✅ **Installable (PWA)** — fonctionne 100 % hors-ligne après la première visite
 - ✅ **Téléchargement individuel** ou archive `.zip` complète
 - ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement
 - ✅ **Copier dans le presse-papiers** d'un clic
@@ -82,8 +84,13 @@ Vous pouvez aussi l'utiliser **complètement hors-ligne** : téléchargez juste 
 
 ## 🏗️ Architecture technique
 
-- **Un seul fichier** : tout est dans `index.html` (HTML + CSS + JS, ~800 lignes)
+- **Quatre fichiers, zéro build** :
+  - `index.html` — toute l'application (HTML + CSS + JS). **Ouvert seul, il reste pleinement fonctionnel** (y compris en `file://`), sans le mode hors-ligne géré.
+  - `sw.js` — service worker : cache hors-ligne (fichier séparé obligatoire, doit être servi en HTTP(S) même-origine)
+  - `manifest.webmanifest` — manifeste PWA (installation)
+  - `icone.svg` — icône de l'application
 - **Zéro framework** : JavaScript vanilla, pas de webpack, pas de build
+- **Conversions lourdes déléguées** : les tableurs / CSV / PowerPoint sont parsés dans un **Web Worker** (construit à partir du bloc `#code-partage` d'`index.html`, sans duplication de code), avec repli automatique sur le fil principal si le worker ne peut pas démarrer
 - **Bibliothèques tierces** : chargées depuis [cdnjs.cloudflare.com](https://cdnjs.com), versions épinglées
 - **Compatibilité** : Chrome, Edge, Firefox récents (testé sur les 3)
 
@@ -105,13 +112,14 @@ Pour modifier l'outil :
 
 Aucune compilation, aucun build, aucune dépendance npm.
 
+> **Note (service worker)** : modifier `index.html` seul ne demande rien de particulier — les pages sont servies « réseau d'abord », la nouvelle version s'affiche au rechargement suivant. En revanche, si vous **changez la version d'une bibliothèque CDN**, mettez à jour son URL dans `index.html` **et** dans `sw.js` (`PRECACHE`), puis incrémentez la constante `VERSION` de `sw.js` pour purger l'ancien cache.
+
 ---
 
 ## 📅 Roadmap (idées, non engageant)
 
 - 🔭 OCR pour les PDF scannés (Tesseract.js — décision en attente, ~20 Mo à charger)
 - 🔭 Extraction des images intégrées dans les `.docx` et `.pptx`
-- 🔭 Mode PWA installable (utilisation hors-ligne complète après une visite)
 - 🔭 Support `.epub` (e-books)
 - 🔭 Interface mobile optimisée (actuellement responsive mais perfectible)
 
