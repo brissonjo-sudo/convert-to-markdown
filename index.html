@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📄 ➜ 📝 Convertisseur Markdown</title>
 
+  <!-- PWA : installable et fonctionnel hors-ligne après la première visite -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icone.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icone.svg">
+  <meta name="theme-color" content="#2563eb">
+
   <!-- CDN cdnjs.cloudflare.com — versions épinglées
        SÉCURITÉ : Pour activer la vérification d'intégrité SRI, obtenez les hashes sur
        https://www.srihash.org/ ou https://cdnjs.com (page de chaque lib) et ajoutez :
@@ -12,22 +18,26 @@
        Exemple :
          <script src="..." integrity="sha384-xxxx" crossorigin="anonymous"></script>
   -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <!-- defer : les bibliothèques (~1 Mo) se chargent en parallèle sans bloquer le
+       premier affichage ; verifierBibliotheques() tourne sur DOMContentLoaded,
+       qui n'est déclenché qu'après leur exécution. -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: mammoth introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: turndown introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: pdf.js introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: SheetJS introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: PapaParse introuvable')"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
           crossorigin="anonymous"
           onerror="console.warn('CDN: JSZip introuvable')"></script>
 
@@ -259,46 +269,18 @@
   </div>
 </div>
 
-<script>
+<!-- Code PARTAGÉ entre le fil principal et le Web Worker.
+     Ce bloc s'exécute normalement dans la page ; de plus, son textContent est
+     réutilisé tel quel pour construire le blob du worker (voir creerBlobTravailleur),
+     ce qui évite toute duplication de code.
+     RÈGLE : uniquement des fonctions PURES ici — aucun accès à document, window,
+     DOMParser ou Turndown (indisponibles dans un worker). Les globals XLSX / Papa /
+     JSZip / TextDecoder existent dans les deux contextes. -->
+<script id="code-partage">
 'use strict';
 
-// =====================================================================
-// SECTION 1 : CONFIG
-// =====================================================================
-const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
-const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
-
-// Messages pour les formats refusés
-const FORMATS_REFUSES = {
-  '.doc': 'Format Word ancien (.doc) non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
-  '.ppt': 'Format PowerPoint ancien (.ppt) non pris en charge. Ouvrez dans PowerPoint et enregistrez en .pptx, puis recommencez.',
-  '.odt': 'Format OpenDocument texte. Ouvrez dans LibreOffice Writer et enregistrez en .docx, puis recommencez.',
-  '.odp': 'Format OpenDocument présentation. Ouvrez dans LibreOffice Impress et enregistrez en .pptx, puis recommencez.',
-  '.rtf': 'Format RTF non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
-};
-
-// Registre des convertisseurs (construit après chargement des bibliothèques)
-let CONVERTISSEURS = {};
-
-// Résultats en mémoire [{nom, md, statut}]
-let resultats = [];
-
-// =====================================================================
-// SECTION 2 : UTILITAIRES
-// =====================================================================
-const extOf = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-
+const extOf    = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 const baseName = nom => nom.replace(/\.[^.]+$/, '');
-
-function lireCommeArrayBuffer(fichier) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = e => resolve(e.target.result);
-    reader.onerror = () => reject(new Error('Impossible de lire le fichier.'));
-    reader.readAsArrayBuffer(fichier);
-  });
-}
 
 function ecapperCellule(s) {
   return String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>').replace(/\r/g, '').trim();
@@ -313,15 +295,6 @@ function construireTableMd(rows) {
   const toRow = r => '| ' + pad(r).map(ecapperCellule).join(' | ') + ' |';
   const sep   = '|' + Array(nbCols).fill(' --- ').join('|') + '|';
   return [toRow(rows[0]), sep, ...rows.slice(1).map(toRow)].join('\n');
-}
-
-function telechargerBlob(contenu, nom) {
-  const blob = new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), { href: url, download: nom });
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s : suffisant même pour fichiers lourds
 }
 
 // Détecte l'encodage d'un ArrayBuffer (BOM UTF-8/UTF-16, sinon fallback Latin-1)
@@ -358,12 +331,148 @@ function desescaperXml(s) {
     .replace(/&quot;/g, '"');
 }
 
+// .xlsx / .xls / .ods → Markdown (SheetJS)
+async function convTableur(ab, nom) {
+  // cellHTML/cellFormula désactivés : seules les valeurs affichées nous
+  // intéressent — moins de travail de parsing et de mémoire sur les gros classeurs.
+  const wb    = XLSX.read(ab, { type: 'buffer', cellHTML: false, cellFormula: false });
+  const blocs = [`# ${baseName(nom)}\n`];
+
+  for (const sheetName of wb.SheetNames) {
+    const ws   = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    blocs.push(`\n## Feuille : ${sheetName}\n`);
+    // construireTableMd convertit déjà chaque cellule en chaîne : pas besoin
+    // de dupliquer toutes les lignes avec un .map(String) préalable.
+    blocs.push(rows.length ? construireTableMd(rows) : '_(feuille vide)_');
+  }
+  return blocs.join('\n') + '\n';
+}
+
+// .csv / .tsv → Markdown (PapaParse)
+async function convCsv(ab, nom) {
+  const texte  = detecterEtDecoder(ab);
+  const sep    = extOf(nom) === '.tsv' ? '\t' : '';
+  const result = Papa.parse(texte, { delimiter: sep, skipEmptyLines: true, header: false });
+  const rows   = result.data;
+  if (!rows.length) return `# ${baseName(nom)}\n\n_(fichier vide)_\n`;
+  return `# ${baseName(nom)}\n\n${construireTableMd(rows)}\n`;
+}
+
+// .pptx → Markdown (JSZip + parsing XML)
+async function convPptx(ab, nom) {
+  const zip = await JSZip.loadAsync(ab);
+
+  const slideKeys = Object.keys(zip.files)
+    .filter(p => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
+    .sort((a, b) => {
+      const na = parseInt((a.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
+      const nb = parseInt((b.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
+      return na - nb;
+    });
+
+  if (!slideKeys.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
+
+  // Décompresser toutes les diapositives en parallèle plutôt qu'une par une
+  const xmls  = await Promise.all(slideKeys.map(k => zip.files[k].async('text')));
+  const blocs = [`# ${baseName(nom)}\n`];
+
+  for (let i = 0; i < xmls.length; i++) {
+    const xml = xmls[i];
+    blocs.push(`\n## Diapositive ${i + 1}\n`);
+
+    const paragraphes = xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
+    for (const para of paragraphes) {
+      const textes = [...para.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map(m => desescaperXml(m[1]));
+      const ligne  = textes.join('').trim();
+      if (ligne) blocs.push(`- ${ligne}`);
+    }
+  }
+
+  return blocs.join('\n') + '\n';
+}
+</script>
+
+<script>
+'use strict';
+
 // =====================================================================
-// SECTION 3 : CONVERTISSEURS
+// SECTION 1 : CONFIG
+// =====================================================================
+const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
+const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
+const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultanément
+
+// Messages pour les formats refusés
+const FORMATS_REFUSES = {
+  '.doc': 'Format Word ancien (.doc) non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
+  '.ppt': 'Format PowerPoint ancien (.ppt) non pris en charge. Ouvrez dans PowerPoint et enregistrez en .pptx, puis recommencez.',
+  '.odt': 'Format OpenDocument texte. Ouvrez dans LibreOffice Writer et enregistrez en .docx, puis recommencez.',
+  '.odp': 'Format OpenDocument présentation. Ouvrez dans LibreOffice Impress et enregistrez en .pptx, puis recommencez.',
+  '.rtf': 'Format RTF non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
+};
+
+// Registre des convertisseurs (construit après chargement des bibliothèques)
+let CONVERTISSEURS = {};
+
+// Résultats en mémoire [{nom, md, statut}]
+let resultats = [];
+
+// =====================================================================
+// SECTION 2 : UTILITAIRES (fil principal uniquement)
+// Les helpers purs partagés avec le worker (extOf, baseName, ecapperCellule,
+// construireTableMd, detecterEtDecoder, desescaperXml) sont dans #code-partage.
+// =====================================================================
+function lireCommeArrayBuffer(fichier) {
+  // API moderne, sans passer par les événements FileReader
+  if (typeof fichier.arrayBuffer === 'function') {
+    return fichier.arrayBuffer().catch(() => { throw new Error('Impossible de lire le fichier.'); });
+  }
+  // Repli pour les navigateurs anciens
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('Impossible de lire le fichier.'));
+    reader.readAsArrayBuffer(fichier);
+  });
+}
+
+function ecapperCellule(s) {
+  return String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>').replace(/\r/g, '').trim();
+}
+
+function construireTableMd(rows) {
+  if (!rows || !rows.length) return '_(vide)_';
+  // reduce au lieu de Math.max(...spread) : ce dernier plante au-delà de ~100k lignes
+  // (dépassement de la pile d'appels). Crucial pour les gros exports Excel/CSV.
+  const nbCols = rows.reduce((m, r) => r.length > m ? r.length : m, 0);
+  const pad = r => { const c = [...r]; while (c.length < nbCols) c.push(''); return c; };
+  const toRow = r => '| ' + pad(r).map(ecapperCellule).join(' | ') + ' |';
+  const sep   = '|' + Array(nbCols).fill(' --- ').join('|') + '|';
+  return [toRow(rows[0]), sep, ...rows.slice(1).map(toRow)].join('\n');
+}
+
+function telechargerBlob(contenu, nom) {
+  const blob = new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: nom });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s : suffisant même pour fichiers lourds
+}
+
+// =====================================================================
+// SECTION 3 : CONVERTISSEURS (fil principal)
+// convTableur / convCsv / convPptx (purs) sont dans #code-partage ; ils
+// tournent dans le worker et servent aussi de repli ici via CONVERTISSEURS.
 // =====================================================================
 
-// Crée une instance TurndownService configurée avec support des tableaux
+// Instance TurndownService partagée (les règles sont statiques, l'instance est
+// réutilisable : inutile de la reconstruire à chaque fichier)
+let turndownPartage = null;
 function creerTurndown() {
+  if (turndownPartage) return turndownPartage;
   const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 
   // Cellules
@@ -386,6 +495,7 @@ function creerTurndown() {
   // Tableau global
   td.addRule('table', { filter: 'table', replacement: c => '\n\n' + c.trim() + '\n\n' });
 
+  turndownPartage = td;
   return td;
 }
 
@@ -399,94 +509,49 @@ async function convDocx(ab) {
 async function convPdf(ab, nom) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
   const pdf  = await loadingTask.promise;
-  const blocs = [`# ${baseName(nom)}\n`];
-  let totalChars = 0;
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page   = await pdf.getPage(pageNum);
-    const tc     = await page.getTextContent();
+  try {
+    // Extraire toutes les pages en parallèle (le worker PDF.js pipeline les
+    // requêtes) plutôt qu'en attendant chaque page l'une après l'autre.
+    const contenus = await Promise.all(
+      Array.from({ length: pdf.numPages }, (_, i) =>
+        pdf.getPage(i + 1).then(page => page.getTextContent())
+      )
+    );
 
-    // Regrouper les items par position Y (tolérance 2 unités)
-    const carte = new Map();
-    for (const item of tc.items) {
-      const y = Math.round(item.transform[5] / 2) * 2;
-      if (!carte.has(y)) carte.set(y, []);
-      carte.get(y).push({ x: item.transform[4], t: item.str });
-    }
+    const blocs = [`# ${baseName(nom)}\n`];
+    let totalChars = 0;
 
-    // Trier Y décroissant (haut → bas de la page)
-    const lignes = [...carte.keys()]
-      .sort((a, b) => b - a)
-      .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(i => i.t).join(' ').trim())
-      .filter(l => l.length > 0);
+    contenus.forEach((tc, i) => {
+      // Regrouper les items par position Y (tolérance 2 unités)
+      const carte = new Map();
+      for (const item of tc.items) {
+        const y = Math.round(item.transform[5] / 2) * 2;
+        if (!carte.has(y)) carte.set(y, []);
+        carte.get(y).push({ x: item.transform[4], t: item.str });
+      }
 
-    totalChars += lignes.join('').length;
-    blocs.push(`\n---\n\n## Page ${pageNum}\n\n${lignes.join('\n')}`);
-  }
+      // Trier Y décroissant (haut → bas de la page)
+      const lignes = [...carte.keys()]
+        .sort((a, b) => b - a)
+        .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(it => it.t).join(' ').trim())
+        .filter(l => l.length > 0);
 
-  const md = blocs.join('').trim() + '\n';
-
-  // Détecter un PDF scanné
-  if (totalChars < SEUIL_PDF_SCAN) {
-    return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
-  }
-
-  return md;
-}
-
-// .xlsx / .xls / .ods → Markdown (SheetJS)
-async function convTableur(ab, nom) {
-  const wb    = XLSX.read(ab, { type: 'buffer' });
-  const blocs = [`# ${baseName(nom)}\n`];
-
-  for (const sheetName of wb.SheetNames) {
-    const ws   = wb.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    blocs.push(`\n## Feuille : ${sheetName}\n`);
-    blocs.push(rows.length ? construireTableMd(rows.map(r => r.map(String))) : '_(feuille vide)_');
-  }
-  return blocs.join('\n') + '\n';
-}
-
-// .csv / .tsv → Markdown (PapaParse)
-async function convCsv(ab, nom) {
-  const texte  = detecterEtDecoder(ab);
-  const sep    = extOf(nom) === '.tsv' ? '\t' : '';
-  const result = Papa.parse(texte, { delimiter: sep, skipEmptyLines: true, header: false });
-  const rows   = result.data;
-  if (!rows.length) return `# ${baseName(nom)}\n\n_(fichier vide)_\n`;
-  return `# ${baseName(nom)}\n\n${construireTableMd(rows.map(r => r.map(String)))}\n`;
-}
-
-// .pptx → Markdown (JSZip + parsing XML)
-async function convPptx(ab, nom) {
-  const zip = await JSZip.loadAsync(ab);
-
-  const slideKeys = Object.keys(zip.files)
-    .filter(p => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
-    .sort((a, b) => {
-      const na = parseInt((a.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
-      const nb = parseInt((b.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
-      return na - nb;
+      totalChars += lignes.join('').length;
+      blocs.push(`\n---\n\n## Page ${i + 1}\n\n${lignes.join('\n')}`);
     });
 
-  if (!slideKeys.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
-
-  const blocs = [`# ${baseName(nom)}\n`];
-
-  for (let i = 0; i < slideKeys.length; i++) {
-    const xml  = await zip.files[slideKeys[i]].async('text');
-    blocs.push(`\n## Diapositive ${i + 1}\n`);
-
-    const paragraphes = xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
-    for (const para of paragraphes) {
-      const textes = [...para.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map(m => desescaperXml(m[1]));
-      const ligne  = textes.join('').trim();
-      if (ligne) blocs.push(`- ${ligne}`);
+    // Détecter un PDF scanné
+    if (totalChars < SEUIL_PDF_SCAN) {
+      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
     }
-  }
 
-  return blocs.join('\n') + '\n';
+    return blocs.join('').trim() + '\n';
+  } finally {
+    // Libérer le document côté worker : sans cela, chaque PDF converti
+    // reste en mémoire jusqu'à la fermeture de l'onglet.
+    loadingTask.destroy();
+  }
 }
 
 // .txt → Markdown
@@ -505,12 +570,186 @@ async function convHtml(ab) {
 }
 
 // =====================================================================
+// SECTION 3bis : WEB WORKER (conversions lourdes hors du fil principal)
+// Les gros tableurs / CSV / PPTX bloquaient l'interface pendant le parsing.
+// On les délègue à un worker unique ; en cas d'échec d'initialisation, tout
+// retombe silencieusement sur les convertisseurs du fil principal.
+// =====================================================================
+
+// Extensions routées vers le worker (les autres restent sur le fil principal :
+// .docx/.html ont besoin du DOM, .pdf a déjà son propre worker PDF.js).
+const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv', '.pptx']);
+
+// URLs des libs chargées DANS le worker. Surchargables pour les tests via
+// self.__URLS_LIBS_TEST__ (page.route de Playwright n'intercepte pas les
+// importScripts d'un worker blob).
+const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
+  xlsx:      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  papaparse: 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',
+  jszip:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+};
+
+// Corps du worker : importe les libs (chacune isolée → disponibilité partielle
+// possible), puis répond aux requêtes {id, ext, nom, ab} par {id, ok, md|erreur}.
+// La poignée de main {type:'pret', exts} annonce les extensions réellement gérées.
+const BOOTSTRAP_TRAVAILLEUR = `
+const CONVERTISSEURS_W = {};
+try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; } catch (e) {}
+try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
+try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; } catch (e) {}
+self.onmessage = async (e) => {
+  const { id, ext, nom, ab } = e.data;
+  try {
+    const conv = CONVERTISSEURS_W[ext];
+    if (!conv) throw new Error('Convertisseur indisponible dans le worker : ' + ext);
+    self.postMessage({ id, ok: true, md: await conv(ab, nom) });
+  } catch (err) {
+    self.postMessage({ id, ok: false, erreur: (err && err.message) || String(err) });
+  }
+};
+self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
+`;
+
+// Construit le blob du worker : URLs + code partagé (réutilisé tel quel) + bootstrap.
+function creerBlobTravailleur() {
+  const partage = document.getElementById('code-partage').textContent;
+  const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' + partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
+  return URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+}
+
+let travailleur = null;
+let travailleurPretPromise = null;
+let travailleurMort = false;
+let prochainIdReq = 1;
+const requetesEnCours = new Map();                     // id → {resolve, reject}
+const statsTravailleur = { converties: 0, replis: 0 }; // observable pour les tests
+
+// Marque le worker mort et rejette les requêtes en attente (→ repli fil principal).
+function arreterTravailleur() {
+  travailleurMort = true;
+  if (travailleur) { try { travailleur.terminate(); } catch { /* ignore */ } travailleur = null; }
+  for (const req of requetesEnCours.values()) {
+    const e = new Error('Worker interrompu'); e.__infra = true;
+    req.reject(e);
+  }
+  requetesEnCours.clear();
+}
+
+// Crée le worker paresseusement et résout avec la liste des extensions gérées
+// (ou null si l'initialisation échoue). Un seul worker persistant pour toute la session.
+function initTravailleur() {
+  if (travailleurMort) return Promise.resolve(null);
+  if (travailleurPretPromise) return travailleurPretPromise;
+
+  travailleurPretPromise = new Promise((resolve) => {
+    let regle = false;
+    const finir = v => { if (!regle) { regle = true; resolve(v); } };
+
+    let blobUrl;
+    try {
+      blobUrl = creerBlobTravailleur();
+      travailleur = new Worker(blobUrl);
+    } catch (e) {
+      console.warn('Worker : création impossible, repli sur le fil principal.', e.message || e);
+      travailleurMort = true;
+      finir(null);
+      return;
+    }
+
+    // Poignée de main : si le worker ne se signale pas prêt à temps, on abandonne.
+    const minuteur = setTimeout(() => {
+      if (!regle) {
+        console.warn('Worker : poignée de main expirée, repli sur le fil principal.');
+        arreterTravailleur();
+        finir(null);
+      }
+    }, 15000);
+
+    travailleur.onmessage = (e) => {
+      const d = e.data;
+      if (d && d.type === 'pret') {
+        clearTimeout(minuteur);
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        console.info('Worker de conversion prêt :', d.exts.join(', ') || '(aucune lib chargée)');
+        finir(d.exts);
+        return;
+      }
+      const req = requetesEnCours.get(d.id);
+      if (!req) return;
+      requetesEnCours.delete(d.id);
+      if (d.ok) req.resolve(d.md);
+      else      req.reject(new Error(d.erreur)); // vraie erreur de conversion → journal
+    };
+
+    travailleur.onerror = (e) => {
+      clearTimeout(minuteur);
+      console.warn('Worker : erreur fatale, repli sur le fil principal.', (e && e.message) || '');
+      arreterTravailleur();       // rejette les requêtes en cours avec le marqueur __infra
+      finir(null);                // sans effet si déjà prêt ; force null si mort avant 'pret'
+    };
+  });
+  return travailleurPretPromise;
+}
+
+// Convertit via le worker. Renvoie null si le worker ne prend pas en charge cette
+// extension (→ le fil principal prend le relais). Rejette avec err.__infra si le
+// worker meurt en cours (→ repli aussi), ou avec une vraie erreur de conversion.
+async function convertirViaTravailleur(fichier, ext, nom) {
+  const exts = await initTravailleur();
+  if (!exts || travailleurMort || !travailleur || !exts.includes(ext)) {
+    statsTravailleur.replis++;
+    return null;
+  }
+  const ab = await lireCommeArrayBuffer(fichier);
+  return new Promise((resolve, reject) => {
+    const id = prochainIdReq++;
+    requetesEnCours.set(id, {
+      resolve: md => { statsTravailleur.converties++; resolve(md); },
+      reject,
+    });
+    try {
+      travailleur.postMessage({ id, ext, nom, ab }, [ab]); // transfert, pas de copie
+    } catch (e) {
+      requetesEnCours.delete(id);
+      const err = new Error('Envoi au worker impossible'); err.__infra = true;
+      reject(err);
+    }
+  });
+}
+
+// Point d'entrée unique de conversion : worker pour les formats lourds (avec repli
+// transparent), fil principal pour le reste.
+async function convertir(fichier, ext, nom) {
+  if (EXTENSIONS_TRAVAILLEUR.has(ext) && !travailleurMort) {
+    try {
+      const md = await convertirViaTravailleur(fichier, ext, nom);
+      if (md !== null) return md;
+    } catch (err) {
+      if (!(err && err.__infra)) throw err; // vraie erreur → remonte au journal
+      statsTravailleur.replis++;            // panne worker → repli fil principal
+      console.warn('Repli fil principal après panne worker :', err.message);
+    }
+  }
+  const ab = await lireCommeArrayBuffer(fichier);
+  return CONVERTISSEURS[ext](ab, nom);
+}
+
+// =====================================================================
 // SECTION 4 : ORCHESTRATEUR
 // =====================================================================
 async function traiterFichiers(fileList) {
-  for (const fichier of Array.from(fileList)) {
-    await traiterUnFichier(fichier);
-  }
+  // Pool de conversion : jusqu'à N fichiers en parallèle au lieu d'un par un.
+  // Chaque travailleur pioche le fichier suivant dès qu'il a fini le sien,
+  // donc les lignes du journal apparaissent dans l'ordre de dépôt.
+  const fichiers = Array.from(fileList);
+  let prochain = 0;
+  const travailleur = async () => {
+    while (prochain < fichiers.length) {
+      await traiterUnFichier(fichiers[prochain++]);
+    }
+  };
+  const nbTravailleurs = Math.min(CONVERSIONS_MAX_PARALLELES, fichiers.length);
+  await Promise.all(Array.from({ length: nbTravailleurs }, travailleur));
   mettreAJourBoutonZip();
 }
 
@@ -539,10 +778,9 @@ async function traiterUnFichier(fichier) {
     ajouterLigne({ id, icone: '⏳', nom, statut: 'en-cours', msg: 'Conversion en cours…', cliquable: false });
   }
 
-  // 4. Conversion
+  // 4. Conversion (worker pour les formats lourds, fil principal sinon)
   try {
-    const ab = await lireCommeArrayBuffer(fichier);
-    const md = await CONVERTISSEURS[ext](ab, nom);
+    const md = await convertir(fichier, ext, nom);
 
     // Détecter alerte scan PDF
     const estScan = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
@@ -646,6 +884,17 @@ function initUI() {
   });
 
   verifierBibliotheques();
+  enregistrerServiceWorker();
+}
+
+// Enregistre le service worker (mise en cache hors-ligne + installation PWA).
+// Uniquement en http(s) : inutile et non supporté sous file://.
+function enregistrerServiceWorker() {
+  if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+  navigator.serviceWorker.register('./sw.js')
+    .then(() => navigator.serviceWorker.ready)
+    .then(() => console.info('Application disponible hors-ligne.'))
+    .catch(err => console.warn('Service worker non enregistré :', err.message || err));
 }
 
 // ---- Journal helpers ----
