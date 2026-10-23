@@ -1,5 +1,7 @@
 # 📄 ➜ 📝 Convertisseur Markdown
 
+[![Tests](https://github.com/brissonjo-sudo/convert-to-markdown/actions/workflows/tests.yml/badge.svg)](https://github.com/brissonjo-sudo/convert-to-markdown/actions/workflows/tests.yml)
+
 Un convertisseur universel de fichiers bureautiques en Markdown (.md) — **100 % local, sans installation, sans serveur.**
 
 🔗 **[Utiliser l'application →](https://brissonjo-sudo.github.io/convert-to-markdown/)**
@@ -26,15 +28,17 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 
 ## 📋 Formats pris en charge
 
-| Catégorie | Extensions | Moteur |
-| --- | --- | --- |
-| Word | `.docx` | mammoth.js + Turndown |
-| PDF (texte) | `.pdf` | PDF.js |
-| Excel | `.xlsx`, `.xls`, `.ods` | SheetJS |
-| Données tabulaires | `.csv`, `.tsv` | PapaParse |
-| PowerPoint | `.pptx` | JSZip |
-| Texte | `.txt` | Natif |
-| Page web | `.html`, `.htm` | Turndown |
+| Catégorie | Extensions | Ce qui est restitué | Moteur |
+| --- | --- | --- | --- |
+| Word | `.docx` | Titres, listes, tableaux, images (extraites en fichiers) | mammoth.js + Turndown |
+| PDF (texte) | `.pdf` | Titres, paragraphes, listes ; en-têtes et pieds de page répétés retirés | PDF.js |
+| Excel | `.xlsx`, `.xls`, `.ods` | Une section par feuille, valeurs telles qu'affichées (dates, montants, %) | SheetJS |
+| Données tabulaires | `.csv`, `.tsv` | Tableau ; séparateur et encodage détectés | PapaParse |
+| PowerPoint | `.pptx` | Titres, puces, tableaux, images, notes de l'orateur, dans l'ordre réel | JSZip |
+| Texte | `.txt` | Texte brut | Natif |
+| Page web | `.html`, `.htm` | Structure, tableaux, images intégrées (extraites en fichiers) | Turndown |
+
+Les **images** des documents sont enregistrées à côté du Markdown, dans `images/<document>/`, avec des liens relatifs : un document qui contient des images se télécharge en `.zip` (le `.md` et son dossier d'images).
 
 ---
 
@@ -42,6 +46,8 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
 - **PDF scannés (image)** : aucun texte ne peut être extrait sans **OCR**. Un avertissement est ajouté au fichier produit. Pour traiter ces PDF, utilisez d'abord un outil OCR (Adobe Acrobat, ilovepdf.com, Tesseract…).
+- **Structure des PDF** : un PDF ne contient que du texte positionné ; titres et paragraphes sont déduits de la mise en page (taille de police, interlignes). Les mises en page complexes (plusieurs colonnes, tableaux) sont restituées imparfaitement. Un mot coupé en fin de ligne garde son trait d'union (« collec-tivités ») : sans dictionnaire, impossible de le distinguer d'un mot composé (« porte-monnaie »).
+- **Images `.emf` / `.wmf`** (fréquentes dans les documents Office anciens) : extraites telles quelles, mais la plupart des lecteurs Markdown ne les affichent pas.
 - **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com`. Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
 
 ---
@@ -53,9 +59,9 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 - ✅ **Affichage instantané** — les bibliothèques se chargent en arrière-plan sans bloquer la page
 - ✅ **Interface qui ne gèle jamais** — les conversions lourdes (Excel, CSV, PowerPoint) tournent dans un Web Worker
 - ✅ **Installable (PWA)** — fonctionne 100 % hors-ligne après la première visite
-- ✅ **Téléchargement individuel** ou archive `.zip` complète
-- ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement
-- ✅ **Copier dans le presse-papiers** d'un clic
+- ✅ **Téléchargement individuel** ou archive `.zip` complète, images comprises
+- ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement (limité au début des très gros fichiers, pour rester instantané)
+- ✅ **Copier dans le presse-papiers** d'un clic — toujours le fichier complet
 - ✅ **Détection automatique d'encodage** (UTF-8, UTF-16, Windows-1252) pour les CSV/TXT
 - ✅ **Détection des PDF scannés** avec message d'orientation
 - ✅ **Accessibilité** : navigation clavier complète, focus trap sur les modales, attributs ARIA
@@ -68,8 +74,8 @@ Si vous préférez héberger l'outil sur votre propre serveur ou en local :
 
 ```bash
 # Cloner le repo
-git clone https://github.com/brissonjo-sudo/convertisseur-markdown.git
-cd convertisseur-markdown
+git clone https://github.com/brissonjo-sudo/convert-to-markdown.git
+cd convert-to-markdown
 
 # Aucune dépendance à installer !
 # Il suffit d'ouvrir index.html dans un navigateur :
@@ -99,7 +105,19 @@ Vous pouvez aussi l'utiliser **complètement hors-ligne** : téléchargez juste 
 - ✅ Conversion 100 % côté client (zéro requête réseau pour les fichiers)
 - ✅ Construction DOM sécurisée (pas d'`innerHTML` avec données externes → pas de XSS)
 - ✅ HTML malveillant neutralisé (DOMParser inerte, `<script>`/`<style>` retirés)
-- ✅ Validation par tests automatisés en navigateur (Playwright)
+- ✅ Validation par tests automatisés en navigateur (Playwright), à chaque modification
+
+### Tests
+
+Une suite de tests Playwright (`tests/`) vérifie chaque format de bout en bout dans Chromium : fichiers générés à la volée (PDF, Word, PowerPoint, Excel), contenu exact du Markdown produit, archives ZIP téléchargées, Web Worker et repli, fonctionnement hors-ligne. Elle tourne **sans réseau** : un petit serveur de test (`tests/serveur.js`) sert l'application en remplaçant le CDN par les mêmes versions des bibliothèques, installées via npm.
+
+Les tests se lancent automatiquement sur GitHub à chaque pull request et à chaque modification de `main`. Pour les lancer localement :
+
+```bash
+npm install                          # outillage de test uniquement
+npx playwright install chromium
+npm test
+```
 
 ---
 
@@ -110,7 +128,7 @@ Pour modifier l'outil :
 1. **Modification rapide via GitHub** : cliquez sur le crayon ✏️ sur `index.html`, éditez, commit. L'URL se met à jour en 1-2 min.
 2. **Modification locale** : `git clone`, modifier `index.html`, `git push`. Idem.
 
-Aucune compilation, aucun build, aucune dépendance npm.
+L'application ne demande ni compilation ni dépendance : `package.json` ne sert qu'aux tests (voir ci-dessus), qui vérifient automatiquement chaque pull request.
 
 > **Note (service worker)** : modifier `index.html` seul ne demande rien de particulier — les pages sont servies « réseau d'abord », la nouvelle version s'affiche au rechargement suivant. En revanche, si vous **changez la version d'une bibliothèque CDN**, mettez à jour son URL dans `index.html` **et** dans `sw.js` (`PRECACHE`), puis incrémentez la constante `VERSION` de `sw.js` pour purger l'ancien cache.
 
@@ -119,7 +137,6 @@ Aucune compilation, aucun build, aucune dépendance npm.
 ## 📅 Roadmap (idées, non engageant)
 
 - 🔭 OCR pour les PDF scannés (Tesseract.js — décision en attente, ~20 Mo à charger)
-- 🔭 Extraction des images intégrées dans les `.docx` et `.pptx`
 - 🔭 Support `.epub` (e-books)
 - 🔭 Interface mobile optimisée (actuellement responsive mais perfectible)
 

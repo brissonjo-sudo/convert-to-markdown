@@ -15,6 +15,8 @@ module.exports = defineConfig({
     // Le service worker n'est activé que dans pwa.spec.js : ailleurs il mettrait
     // en cache des réponses entre tests.
     serviceWorkers: 'block',
+    // En CI, trace conservée pour chaque échec (téléchargeable depuis GitHub)
+    trace: process.env.CI ? 'retain-on-failure' : 'off',
   },
   webServer: {
     command: 'node tests/serveur.js',
