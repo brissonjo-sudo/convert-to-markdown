@@ -337,6 +337,18 @@ function desescaperXml(s) {
     .replace(/&quot;/g, '"');
 }
 
+// Extension de fichier d'une image d'après son type MIME (image/jpeg → jpg)
+function extensionImage(type) {
+  const sous = (String(type || '').split(';')[0].split('/')[1] || '').toLowerCase();
+  return ({ jpeg: 'jpg', 'svg+xml': 'svg', 'x-emf': 'emf', 'x-wmf': 'wmf', tiff: 'tif' })[sous]
+    || sous.replace(/[^a-z0-9]/g, '') || 'bin';
+}
+
+// Les convertisseurs renvoient soit du texte, soit { md, images } quand le document
+// contient des images (images : [{ chemin, type, data: ArrayBuffer }], chemin relatif
+// au fichier .md). Cette fonction ramène les deux cas à la seconde forme.
+const normaliserResultat = r => typeof r === 'string' ? { md: r, images: [] } : { md: r.md, images: r.images || [] };
+
 // Conventions d'affichage des nombres et dates : comme Excel suit la langue du
 // système, on suit celle du navigateur (1 234,50 € et 15/03/2026 en français).
 // Dans le worker, LANGUE_PAGE est fournie par la page (voir creerBlobTravailleur).
@@ -483,7 +495,7 @@ const FORMATS_REFUSES = {
 // Registre des convertisseurs (construit après chargement des bibliothèques)
 let CONVERTISSEURS = {};
 
-// Résultats en mémoire [{nom, md, statut}]
+// Résultats en mémoire [{ nom, nomMd, md, images }]
 let resultats = [];
 
 // =====================================================================
@@ -505,23 +517,36 @@ function lireCommeArrayBuffer(fichier) {
   });
 }
 
-function ecapperCellule(s) {
-  return String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>').replace(/\r/g, '').trim();
+// Noms de sortie uniques pour la session, réservés au dépôt du fichier : deux
+// « rapport.* » donnent rapport.md et rapport_2.md, chacun avec son propre dossier
+// d'images. Comparaison sans casse (Windows et macOS ne distinguent pas Rapport
+// de rapport à l'extraction du ZIP). Réinitialisés par « Vider ».
+const nomsSortie     = new Set();
+const dossiersImages = new Set();
+
+function reserverUnique(ensemble, base) {
+  let candidat = base, n = 2;
+  while (ensemble.has(candidat.toLowerCase())) candidat = `${base}_${n++}`;
+  ensemble.add(candidat.toLowerCase());
+  return candidat;
 }
 
-function construireTableMd(rows) {
-  if (!rows || !rows.length) return '_(vide)_';
-  // reduce au lieu de Math.max(...spread) : ce dernier plante au-delà de ~100k lignes
-  // (dépassement de la pile d'appels). Crucial pour les gros exports Excel/CSV.
-  const nbCols = rows.reduce((m, r) => r.length > m ? r.length : m, 0);
-  const pad = r => { const c = [...r]; while (c.length < nbCols) c.push(''); return c; };
-  const toRow = r => '| ' + pad(r).map(ecapperCellule).join(' | ') + ' |';
-  const sep   = '|' + Array(nbCols).fill(' --- ').join('|') + '|';
-  return [toRow(rows[0]), sep, ...rows.slice(1).map(toRow)].join('\n');
+function reserverSortie(nom) {
+  const base = reserverUnique(nomsSortie, baseName(nom));
+  // Dossier d'images sans espaces ni caractères qui casseraient un lien Markdown
+  const slug = base.replace(/[\s()[\]<>#%?"'`\\]+/g, '-').replace(/^-+|-+$/g, '') || 'document';
+  const dossier = reserverUnique(dossiersImages, slug);
+  return { base, dossier, nomMd: base + '.md', dossierImages: 'images/' + dossier };
 }
 
+function libererSortie(sortie) {
+  nomsSortie.delete(sortie.base.toLowerCase());
+  dossiersImages.delete(sortie.dossier.toLowerCase());
+}
+
+// contenu : texte (Markdown) ou Blob déjà construit (archive ZIP)
 function telechargerBlob(contenu, nom) {
-  const blob = new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
+  const blob = contenu instanceof Blob ? contenu : new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), { href: url, download: nom });
   document.body.appendChild(a);
@@ -566,10 +591,21 @@ function creerTurndown() {
   return td;
 }
 
-// .docx → Markdown (mammoth + Turndown)
-async function convDocx(ab) {
-  const res = await mammoth.convertToHtml({ arrayBuffer: ab });
-  return creerTurndown().turndown(res.value);
+// .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
+// (ctx.dossierImages) au lieu d'être recopiées en base64 dans le Markdown, ce
+// qui le rendait illisible et pouvait le faire peser plusieurs Mo.
+async function convDocx(ab, nom, ctx) {
+  const images = [];
+  const res = await mammoth.convertToHtml({ arrayBuffer: ab }, {
+    convertImage: mammoth.images.imgElement(image => {
+      // Place réservée dès l'appel : la numérotation suit l'ordre du document
+      const entree = { chemin: `${ctx.dossierImages}/image${images.length + 1}.${extensionImage(image.contentType)}`,
+                       type: image.contentType, data: null };
+      images.push(entree);
+      return image.readAsArrayBuffer().then(data => { entree.data = data; return { src: entree.chemin }; });
+    }),
+  });
+  return { md: creerTurndown().turndown(res.value), images };
 }
 
 // .pdf → Markdown (PDF.js, extraction texte par page)
@@ -628,12 +664,27 @@ async function convTxt(ab, nom) {
 }
 
 // .html / .htm → Markdown (Turndown)
-async function convHtml(ab) {
+async function convHtml(ab, nom, ctx) {
   const texte = detecterEtDecoder(ab);
   const doc   = new DOMParser().parseFromString(texte, 'text/html');
   // Retirer le code non visible : son contenu textuel polluerait le Markdown
   doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-  return creerTurndown().turndown(doc.body.innerHTML);
+
+  // Images intégrées (src="data:…") : extraites en fichiers, comme pour Word.
+  // Les images désignées par une URL sont laissées telles quelles.
+  const images = [];
+  for (const img of doc.querySelectorAll('img[src^="data:"]')) {
+    try {
+      const rep  = await fetch(img.getAttribute('src'));
+      const type = rep.headers.get('content-type') || '';
+      const chemin = `${ctx.dossierImages}/image${images.length + 1}.${extensionImage(type)}`;
+      images.push({ chemin, type, data: await rep.arrayBuffer() });
+      img.setAttribute('src', chemin);
+    } catch {
+      img.remove();   // data: illisible → on l'omet plutôt que de recopier un bloc base64
+    }
+  }
+  return { md: creerTurndown().turndown(doc.body.innerHTML), images };
 }
 
 // =====================================================================
@@ -657,7 +708,8 @@ const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
 };
 
 // Corps du worker : importe les libs (chacune isolée → disponibilité partielle
-// possible), puis répond aux requêtes {id, ext, nom, ab} par {id, ok, md|erreur}.
+// possible), puis répond aux requêtes {id, ext, nom, ab, ctx} par
+// {id, ok, md, images} ou {id, ok: false, erreur}.
 // La poignée de main {type:'pret', exts} annonce les extensions réellement gérées.
 const BOOTSTRAP_TRAVAILLEUR = `
 const CONVERTISSEURS_W = {};
@@ -665,11 +717,12 @@ try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_
 try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
 try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; } catch (e) {}
 self.onmessage = async (e) => {
-  const { id, ext, nom, ab } = e.data;
+  const { id, ext, nom, ab, ctx } = e.data;
   try {
     const conv = CONVERTISSEURS_W[ext];
     if (!conv) throw new Error('Convertisseur indisponible dans le worker : ' + ext);
-    self.postMessage({ id, ok: true, md: await conv(ab, nom) });
+    const { md, images } = normaliserResultat(await conv(ab, nom, ctx));
+    self.postMessage({ id, ok: true, md, images }, images.map(i => i.data)); // images transférées
   } catch (err) {
     self.postMessage({ id, ok: false, erreur: (err && err.message) || String(err) });
   }
@@ -747,7 +800,7 @@ function initTravailleur() {
       const req = requetesEnCours.get(d.id);
       if (!req) return;
       requetesEnCours.delete(d.id);
-      if (d.ok) req.resolve(d.md);
+      if (d.ok) req.resolve({ md: d.md, images: d.images || [] });
       else      req.reject(new Error(d.erreur)); // vraie erreur de conversion → journal
     };
 
@@ -764,7 +817,7 @@ function initTravailleur() {
 // Convertit via le worker. Renvoie null si le worker ne prend pas en charge cette
 // extension (→ le fil principal prend le relais). Rejette avec err.__infra si le
 // worker meurt en cours (→ repli aussi), ou avec une vraie erreur de conversion.
-async function convertirViaTravailleur(fichier, ext, nom) {
+async function convertirViaTravailleur(fichier, ext, nom, ctx) {
   const exts = await initTravailleur();
   if (!exts || travailleurMort || !travailleur || !exts.includes(ext)) {
     statsTravailleur.replis++;
@@ -774,11 +827,11 @@ async function convertirViaTravailleur(fichier, ext, nom) {
   return new Promise((resolve, reject) => {
     const id = prochainIdReq++;
     requetesEnCours.set(id, {
-      resolve: md => { statsTravailleur.converties++; resolve(md); },
+      resolve: r => { statsTravailleur.converties++; resolve(r); },
       reject,
     });
     try {
-      travailleur.postMessage({ id, ext, nom, ab }, [ab]); // transfert, pas de copie
+      travailleur.postMessage({ id, ext, nom, ab, ctx }, [ab]); // transfert, pas de copie
     } catch (e) {
       requetesEnCours.delete(id);
       const err = new Error('Envoi au worker impossible'); err.__infra = true;
@@ -788,12 +841,13 @@ async function convertirViaTravailleur(fichier, ext, nom) {
 }
 
 // Point d'entrée unique de conversion : worker pour les formats lourds (avec repli
-// transparent), fil principal pour le reste.
-async function convertir(fichier, ext, nom) {
+// transparent), fil principal pour le reste. Renvoie toujours { md, images }.
+// ctx.dossierImages : dossier (relatif au .md) où ranger les images extraites.
+async function convertir(fichier, ext, nom, ctx) {
   if (EXTENSIONS_TRAVAILLEUR.has(ext) && !travailleurMort) {
     try {
-      const md = await convertirViaTravailleur(fichier, ext, nom);
-      if (md !== null) return md;
+      const r = await convertirViaTravailleur(fichier, ext, nom, ctx);
+      if (r !== null) return r;
     } catch (err) {
       if (!(err && err.__infra)) throw err; // vraie erreur → remonte au journal
       statsTravailleur.replis++;            // panne worker → repli fil principal
@@ -801,7 +855,7 @@ async function convertir(fichier, ext, nom) {
     }
   }
   const ab = await lireCommeArrayBuffer(fichier);
-  return CONVERTISSEURS[ext](ab, nom);
+  return normaliserResultat(await CONVERTISSEURS[ext](ab, nom, ctx));
 }
 
 // =====================================================================
@@ -826,7 +880,6 @@ async function traiterFichiers(fileList) {
 async function traiterUnFichier(fichier) {
   const nom    = fichier.name;
   const ext    = extOf(nom);
-  const nomMd  = baseName(nom) + '.md';
   const id     = 'item-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 
   // 1. Format refusé ?
@@ -848,22 +901,28 @@ async function traiterUnFichier(fichier) {
     ajouterLigne({ id, icone: '⏳', nom, statut: 'en-cours', msg: 'Conversion en cours…', cliquable: false });
   }
 
-  // 4. Conversion (worker pour les formats lourds, fil principal sinon)
+  // 4. Conversion (worker pour les formats lourds, fil principal sinon).
+  // Nom de sortie réservé avant le premier await : l'ordre de dépôt décide des
+  // suffixes _2, _3… même si les conversions parallèles finissent dans le désordre.
+  const sortie = reserverSortie(nom);
   try {
-    const md = await convertir(fichier, ext, nom);
+    const { md, images } = await convertir(fichier, ext, nom, { dossierImages: sortie.dossierImages });
 
     // Détecter alerte scan PDF
-    const estScan = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
-    resultats.push({ nom, nomMd, md });
+    const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
+    const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    resultats.push(resultat);
 
+    const avecImages = images.length ? ` (+ ${images.length} image${images.length > 1 ? 's' : ''})` : '';
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${nomMd}`,
-      md,
+      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${sortie.nomMd}${avecImages}`,
+      resultat,
       cliquable: true,
     });
   } catch (err) {
+    libererSortie(sortie);
     mettreAJourLigne(id, { icone: '❌', statut: 'err', msg: `Erreur : ${err.message}`, cliquable: false });
   }
 }
@@ -907,13 +966,15 @@ function initUI() {
     if (input.files.length) { traiterFichiers(input.files); input.value = ''; }
   });
 
-  // Bouton ZIP
-  btnZip.addEventListener('click', genererZip);
+  // Bouton ZIP (fonction fléchée : ne pas transmettre l'événement de clic comme liste)
+  btnZip.addEventListener('click', () => genererZip());
 
   // Bouton Vider
   btnVider.addEventListener('click', () => {
     journalListe.innerHTML = '';
     resultats = [];
+    nomsSortie.clear();
+    dossiersImages.clear();
     journalSection.hidden = true;
     btnZip.hidden = true;
   });
@@ -988,7 +1049,7 @@ function ajouterLigne({ id, icone, nom, statut, msg, cliquable }) {
   journalListe.appendChild(li);
 }
 
-function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
+function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
   const li = document.getElementById(id);
   if (!li) return;
 
@@ -997,24 +1058,27 @@ function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
   li.querySelector('.journal-msg').textContent   = msg;
 
   const nomSpan = li.querySelector('.journal-nom');
-  if (cliquable && md) {
+  if (cliquable && resultat) {
     nomSpan.classList.remove('non-cliquable');
-    const nomFichier = nomSpan.title;
-    const nomMd      = baseName(nomFichier) + '.md';
+    const { nomMd, md, images } = resultat;
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
     actions.className = 'journal-actions-item';
 
+    // Avec des images, le .md seul aurait des liens cassés : on livre une archive
     const btnDl = document.createElement('button');
     btnDl.className = 'btn btn-secondaire btn-petit';
-    btnDl.textContent = '⬇️ Télécharger';
-    btnDl.addEventListener('click', () => telechargerBlob(md, nomMd));
+    btnDl.textContent = images.length ? '⬇️ Télécharger (.zip)' : '⬇️ Télécharger';
+    if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
+    btnDl.addEventListener('click', () => images.length
+      ? genererZip([resultat], baseName(nomMd) + '.zip')
+      : telechargerBlob(md, nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
     btnPrev.textContent = '👁️ Aperçu';
-    btnPrev.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+    btnPrev.addEventListener('click', () => ouvrirApercu(nomMd, md));
 
     actions.appendChild(btnDl);
     actions.appendChild(btnPrev);
@@ -1022,7 +1086,7 @@ function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
     li.querySelector('.journal-corps').appendChild(actions);
 
     // Clic sur le nom → aperçu
-    nomSpan.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+    nomSpan.addEventListener('click', () => ouvrirApercu(nomMd, md));
   } else {
     nomSpan.classList.add('non-cliquable');
   }
@@ -1081,25 +1145,16 @@ function fermerApercu() {
 }
 
 // ---- ZIP ----
-async function genererZip() {
-  if (!resultats.length) return;
-  const zip    = new JSZip();
-  const noms   = new Set();
-
-  for (const { nom, md } of resultats) {
-    let candidat = baseName(nom) + '.md';
-    let n = 2;
-    while (noms.has(candidat)) { candidat = `${baseName(nom)}_${n++}.md`; }
-    noms.add(candidat);
-    zip.file(candidat, md);
+// Archive des .md (noms déjà uniques, voir reserverSortie) et de leurs images,
+// rangées dans images/<document>/ comme les liens du Markdown l'indiquent.
+async function genererZip(liste = resultats, nomArchive = 'conversions_markdown.zip') {
+  if (!liste.length) return;
+  const zip = new JSZip();
+  for (const { nomMd, md, images } of liste) {
+    zip.file(nomMd, md);
+    for (const img of images || []) zip.file(img.chemin, img.data);
   }
-
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), { href: url, download: 'conversions_markdown.zip' });
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s
+  telechargerBlob(await zip.generateAsync({ type: 'blob' }), nomArchive);
 }
 
 // ---- Vérification bibliothèques ----
