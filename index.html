@@ -196,6 +196,11 @@
     }
     .apercu-titre { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .apercu-header-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+    .apercu-note {
+      background: #fefce8; color: #854d0e;
+      border-bottom: 1px solid #fde047;
+      font-size: .8rem; padding: .5rem 1rem;
+    }
     .apercu-contenu {
       flex: 1; overflow: auto;
       padding: 1rem; font-size: .82rem;
@@ -265,6 +270,7 @@
         <button class="btn btn-secondaire btn-petit" id="btn-fermer-apercu"><span aria-hidden="true">✖</span> Fermer</button>
       </div>
     </div>
+    <p class="apercu-note" id="apercu-note" role="status" hidden></p>
     <pre class="apercu-contenu" id="apercu-contenu" tabindex="0"></pre>
   </div>
 </div>
@@ -331,19 +337,80 @@ function desescaperXml(s) {
     .replace(/&quot;/g, '"');
 }
 
+// Conventions d'affichage des nombres et dates : comme Excel suit la langue du
+// système, on suit celle du navigateur (1 234,50 € et 15/03/2026 en français).
+// Dans le worker, LANGUE_PAGE est fournie par la page (voir creerBlobTravailleur).
+const AFFICHAGE_FR = /^fr\b/i.test(
+  (typeof LANGUE_PAGE !== 'undefined' ? LANGUE_PAGE : typeof navigator !== 'undefined' && navigator.language) || '');
+
+// Formats de date intégrés d'Excel dont l'affichage dépend de la langue
+// (« date courte » n° 14 et 22) : SheetJS les rend à l'américaine (3/15/26).
+const FORMATS_DATE_LOCAUX = new Set(['m/d/yy', 'm/d/yy h:mm']);
+
+const deuxChiffres = n => String(n).padStart(2, '0');
+
+// 1,234.50 → 1 234,50 (uniquement dans les suites de chiffres, pas dans le texte du format)
+const separateursFr = s => s.replace(/\d[\d,.]*\d|\d/g, n => n.replace(/[,.]/g, c => c === ',' ? ' ' : ','));
+
+function texteDate(cell, format) {
+  if (!AFFICHAGE_FR || !(cell.t === 'd' || FORMATS_DATE_LOCAUX.has(format))) {
+    return cell.w != null ? cell.w : String(cell.v);
+  }
+  let j, m, a, h = 0, mi = 0;
+  if (cell.t === 'd') {
+    const d = cell.v; j = d.getDate(); m = d.getMonth() + 1; a = d.getFullYear(); h = d.getHours(); mi = d.getMinutes();
+  } else {
+    const p = XLSX.SSF.parse_date_code(cell.v); j = p.d; m = p.m; a = p.y; h = p.H; mi = p.M;
+  }
+  const date = `${deuxChiffres(j)}/${deuxChiffres(m)}/${a}`;
+  return /h/i.test(format) || (cell.t === 'd' && (h || mi)) ? `${date} ${deuxChiffres(h)}:${deuxChiffres(mi)}` : date;
+}
+
+// Valeur d'une cellule telle qu'affichée dans le tableur (dates, montants, %),
+// et non sa valeur brute (46096 au lieu de 15/03/2026, 0.205 au lieu de 20,5 %).
+function texteCellule(cell) {
+  if (!cell) return '';
+  const format = cell.z || 'General';
+  if (cell.t === 'd' || (cell.t === 'n' && XLSX.SSF.is_date(format))) return texteDate(cell, format);
+  if (cell.t === 'n') {
+    const w = cell.w != null ? cell.w : XLSX.SSF.format(format, cell.v);
+    return AFFICHAGE_FR ? separateursFr(w) : w;
+  }
+  if (cell.w != null) return cell.w;
+  return cell.v == null ? '' : String(cell.v);
+}
+
+// Lignes d'une feuille, en ignorant les lignes et colonnes vides en fin de plage
+// (souvent étendue par une simple mise en forme).
+function lignesFeuille(ws) {
+  if (!ws || !ws['!ref']) return [];
+  const plage  = XLSX.utils.decode_range(ws['!ref']);
+  const lignes = [];
+  let derniereCol = -1;
+  for (let r = plage.s.r; r <= plage.e.r; r++) {
+    const ligne = [];
+    for (let c = plage.s.c; c <= plage.e.c; c++) {
+      const v = texteCellule(ws[XLSX.utils.encode_cell({ r, c })]);
+      if (v !== '' && c - plage.s.c > derniereCol) derniereCol = c - plage.s.c;
+      ligne.push(v);
+    }
+    lignes.push(ligne);
+  }
+  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
+  return lignes.map(l => l.slice(0, derniereCol + 1));
+}
+
 // .xlsx / .xls / .ods → Markdown (SheetJS)
 async function convTableur(ab, nom) {
+  // cellNF : conserver le format de chaque cellule (dates, montants, %).
   // cellHTML/cellFormula désactivés : seules les valeurs affichées nous
   // intéressent — moins de travail de parsing et de mémoire sur les gros classeurs.
-  const wb    = XLSX.read(ab, { type: 'buffer', cellHTML: false, cellFormula: false });
+  const wb    = XLSX.read(ab, { type: 'buffer', cellNF: true, cellHTML: false, cellFormula: false });
   const blocs = [`# ${baseName(nom)}\n`];
 
   for (const sheetName of wb.SheetNames) {
-    const ws   = wb.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const rows = lignesFeuille(wb.Sheets[sheetName]);
     blocs.push(`\n## Feuille : ${sheetName}\n`);
-    // construireTableMd convertit déjà chaque cellule en chaîne : pas besoin
-    // de dupliquer toutes les lignes avec un .map(String) préalable.
     blocs.push(rows.length ? construireTableMd(rows) : '_(feuille vide)_');
   }
   return blocs.join('\n') + '\n';
@@ -610,10 +677,13 @@ self.onmessage = async (e) => {
 self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
 `;
 
-// Construit le blob du worker : URLs + code partagé (réutilisé tel quel) + bootstrap.
+// Construit le blob du worker : URLs + langue de la page + code partagé
+// (réutilisé tel quel) + bootstrap.
 function creerBlobTravailleur() {
   const partage = document.getElementById('code-partage').textContent;
-  const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' + partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
+  const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' +
+    'const LANGUE_PAGE = ' + JSON.stringify(navigator.language || '') + ';\n' +
+    partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
   return URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
 }
 
@@ -863,24 +933,12 @@ function initUI() {
     }
   });
 
-  document.getElementById('btn-copier').addEventListener('click', () => {
-    const texte = apercuContenu.textContent;
-    const btn   = document.getElementById('btn-copier');
-    const ok = () => { btn.textContent = '✅ Copié !'; setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000); };
-    // Clipboard API (HTTPS) ; fallback execCommand pour contextes locaux (file://)
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(texte).then(ok).catch(() => {
-        try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Erreur copie'; }
-      });
-    } else {
-      // Fallback : sélectionner le texte dans le <pre>
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(apercuContenu);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Copie manuelle'; }
-    }
+  document.getElementById('btn-copier').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-copier');
+    // Toujours le Markdown complet, même si l'aperçu affiché est tronqué
+    const reussi = await copierTexte(apercuMdComplet);
+    btn.textContent = reussi ? '✅ Copié !' : '⚠️ Copie impossible';
+    setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000);
   });
 
   verifierBibliotheques();
@@ -976,11 +1034,46 @@ function mettreAJourBoutonZip() {
 }
 
 // ---- Aperçu ----
+// Au-delà, afficher le texte fige la page (≈ 1,5 s pour 3 Mo) : on n'en montre
+// que le début. Copier et Télécharger portent toujours sur le fichier complet.
+const APERCU_MAX_CARACTERES = 100000;
+let apercuMdComplet = '';
+
 function ouvrirApercu(nom, md) {
-  apercuTitre.textContent   = baseName(nom) + '.md';
-  apercuContenu.textContent = md;
+  apercuMdComplet = md;
+  apercuTitre.textContent = baseName(nom) + '.md';
+  const note = document.getElementById('apercu-note');
+  if (md.length > APERCU_MAX_CARACTERES) {
+    // Couper en fin de ligne pour ne pas tronquer une ligne de tableau au milieu
+    const coupe = md.lastIndexOf('\n', APERCU_MAX_CARACTERES);
+    apercuContenu.textContent = md.slice(0, coupe > 0 ? coupe : APERCU_MAX_CARACTERES);
+    const fr = n => n.toLocaleString('fr-FR');
+    note.textContent = `Aperçu limité au début du fichier (${fr(APERCU_MAX_CARACTERES)} premiers caractères sur ` +
+      `${fr(md.length)}). « Copier » et « Télécharger » portent sur le fichier complet.`;
+    note.hidden = false;
+  } else {
+    apercuContenu.textContent = md;
+    note.hidden = true;
+  }
   apercuOverlay.hidden = false;
   apercuContenu.focus();
+}
+
+// Copie dans le presse-papiers. Repli pour les contextes où l'API est refusée
+// (file://, navigateur ancien) : zone de texte temporaire hors écran.
+async function copierTexte(texte) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(texte); return true; } catch { /* repli ci-dessous */ }
+  }
+  const zone = Object.assign(document.createElement('textarea'), { value: texte, readOnly: true });
+  zone.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.appendChild(zone);
+  zone.select();
+  let reussi = false;
+  try { reussi = document.execCommand('copy'); } catch { reussi = false; }
+  zone.remove();
+  apercuContenu.focus();
+  return reussi;
 }
 
 function fermerApercu() {
