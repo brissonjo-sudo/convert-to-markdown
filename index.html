@@ -608,7 +608,156 @@ async function convDocx(ab, nom, ctx) {
   return { md: creerTurndown().turndown(res.value), images };
 }
 
-// .pdf → Markdown (PDF.js, extraction texte par page)
+// ---- PDF : reconstruction de la structure ----
+// PDF.js ne fournit que des fragments de texte positionnés. On reconstruit les
+// lignes, puis les paragraphes, titres et listes à partir de la géométrie.
+
+// Taille arrondie au demi-point, pour regrouper les tailles quasi identiques
+const taillePdf = t => Math.round(t * 2) / 2;
+
+// Fragments → lignes { texte, y, x, fin, taille }, de haut en bas
+function lignesPdf(items) {
+  const frags = items
+    .filter(it => it.str && it.str.trim())
+    .map(it => {
+      const taille = Math.hypot(it.transform[2], it.transform[3]) || it.height || 0;
+      return { t: it.str, x: it.transform[4], y: it.transform[5], fin: it.transform[4] + (it.width || 0), taille };
+    })
+    .sort((a, b) => b.y - a.y || a.x - b.x);
+
+  // Même ligne si l'écart vertical est faible devant la taille de police
+  // (garde les exposants comme « 1er » sur leur ligne)
+  const groupes = [];
+  for (const f of frags) {
+    const g = groupes[groupes.length - 1];
+    if (g && Math.abs(g.y - f.y) <= Math.max(2, 0.4 * Math.max(g.taille, f.taille))) {
+      g.frags.push(f);
+      if (f.taille > g.taille) { g.taille = f.taille; g.y = f.y; }
+    } else {
+      groupes.push({ y: f.y, taille: f.taille, frags: [f] });
+    }
+  }
+
+  return groupes.map(g => {
+    g.frags.sort((a, b) => a.x - b.x);
+    // Espace seulement si un vrai blanc sépare deux fragments : un mot découpé
+    // en plusieurs fragments n'est plus coupé en deux.
+    let texte = '';
+    let finPrec = null;
+    for (const f of g.frags) {
+      if (finPrec !== null && f.x - finPrec > 0.15 * f.taille && !/\s$/.test(texte) && !/^\s/.test(f.t)) texte += ' ';
+      texte += f.t;
+      finPrec = f.fin;
+    }
+    return { texte: texte.replace(/\s+/g, ' ').trim(), y: g.y, x: g.frags[0].x,
+             fin: g.frags[g.frags.length - 1].fin, taille: g.taille };
+  }).filter(l => l.texte);
+}
+
+// Retire les en-têtes et pieds de page répétés (dont les numéros de page) :
+// lignes situées dans les 10 % du haut ou du bas, identiques chiffres mis à
+// part, présentes sur au moins 60 % des pages (et 3 pages minimum).
+function retirerEntetesPieds(pages) {
+  if (pages.length < 3) return;
+  const enMarge = (l, p) => l.y > p.haut - 0.1 * p.hauteur || l.y < p.bas + 0.1 * p.hauteur;
+  const cle = l => l.texte.replace(/\d+/g, '#');
+  const compte = new Map();
+  for (const p of pages) {
+    for (const k of new Set(p.lignes.filter(l => enMarge(l, p)).map(cle))) compte.set(k, (compte.get(k) || 0) + 1);
+  }
+  const seuil = Math.max(3, Math.ceil(pages.length * 0.6));
+  for (const p of pages) p.lignes = p.lignes.filter(l => !(enMarge(l, p) && compte.get(cle(l)) >= seuil));
+}
+
+// Taille du corps de texte : celle qui porte le plus de caractères
+function tailleCorps(pages) {
+  const poids = new Map();
+  for (const p of pages) for (const l of p.lignes) poids.set(taillePdf(l.taille), (poids.get(taillePdf(l.taille)) || 0) + l.texte.length);
+  const plusLourde = [...poids].sort((a, b) => b[1] - a[1])[0];
+  return plusLourde ? plusLourde[0] : 12;
+}
+
+const estTitrePdf = (l, corps) => l.taille >= corps * 1.15 && l.texte.length <= 120 && /\p{L}/u.test(l.texte);
+
+// Niveau Markdown de chaque taille de titre : la plus grande → ##, puis ###, puis ####
+function niveauxTitres(pages, corps) {
+  const tailles = new Set();
+  for (const p of pages) for (const l of p.lignes) if (estTitrePdf(l, corps)) tailles.add(taillePdf(l.taille));
+  return new Map([...tailles].sort((a, b) => b - a).map((t, i) => [t, Math.min(2 + i, 4)]));
+}
+
+const PUCE_PDF   = /^(?:[•◦▪▫●○■□➢➤►]\s*|[-–*]\s+)/;   //  : puce Symbol/Wingdings
+const NUMERO_PDF = /^\d{1,3}[.)]\s/;                              // 1. ou 2)
+const LETTRE_PDF = /^[a-z][)]\s/i;                                // a) : nouveau paragraphe
+
+// Fin de ligne avec césure (« trans- / port ») : on garde le trait d'union et on
+// colle, ce qui reste juste pour les mots composés (porte-monnaie).
+const joindrePdf = (a, b) => /\p{L}-$/u.test(a) && /^\p{Ll}/u.test(b) ? a + b : a + ' ' + b;
+
+// Lignes d'une page → blocs Markdown (titres, paragraphes, listes)
+function blocsPage(p, corps, niveaux) {
+  const lignes = p.lignes;
+  // Interligne habituel : médiane des écarts entre lignes consécutives
+  const ecarts = [];
+  for (let i = 1; i < lignes.length; i++) { const e = lignes[i - 1].y - lignes[i].y; if (e > 0) ecarts.push(e); }
+  ecarts.sort((a, b) => a - b);
+  const interligne = ecarts.length ? ecarts[Math.floor(ecarts.length / 2)] : corps * 1.2;
+  // Bord droit du texte : une ligne qui s'arrête nettement avant est un retour
+  // à la ligne voulu (adresse, signature), conservé tel quel.
+  const bordDroit = lignes.reduce((m, l) => Math.max(m, l.fin), 0);
+  const bordGauche = lignes.reduce((m, l) => Math.min(m, l.x), Infinity);
+  const ligneCourte = l => l.fin < bordDroit - 0.3 * (bordDroit - bordGauche);
+
+  const blocs = [];
+  let bloc = null;   // { type: 'titre'|'para'|'liste', texte|items, derniere, niveau, xItem }
+  const fermer = () => {
+    if (!bloc) return;
+    if (bloc.type === 'titre') blocs.push('#'.repeat(bloc.niveau) + ' ' + bloc.texte);
+    else if (bloc.type === 'liste') blocs.push(bloc.items.join('\n'));
+    else blocs.push(bloc.texte);
+    bloc = null;
+  };
+
+  for (const l of lignes) {
+    const prec   = bloc && bloc.derniere;
+    const ecart  = prec ? prec.y - l.y : 0;
+    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15;
+    const niveau = estTitrePdf(l, corps) && niveaux.get(taillePdf(l.taille));
+
+    if (niveau) {
+      // Titre sur plusieurs lignes : même niveau, lignes rapprochées
+      if (bloc && bloc.type === 'titre' && bloc.niveau === niveau && ecart <= l.taille * 1.6) {
+        bloc.texte += ' ' + l.texte;
+      } else {
+        fermer();
+        bloc = { type: 'titre', niveau, texte: l.texte };
+      }
+    } else if (PUCE_PDF.test(l.texte) || NUMERO_PDF.test(l.texte)) {
+      const puce  = l.texte.match(PUCE_PDF);
+      const item  = puce ? '- ' + l.texte.slice(puce[0].length) : l.texte;
+      const genre = puce ? 'puces' : 'numeros';
+      // Changement de type de liste : nouveau bloc, sinon Markdown rattacherait
+      // « 2. … » à l'élément à puce précédent
+      if (bloc && bloc.type === 'liste' && bloc.genre === genre && ecart <= interligne * 2.5) bloc.items.push(item);
+      else { fermer(); bloc = { type: 'liste', genre, items: [item] }; }
+      bloc.xItem = l.x;
+    } else if (bloc && bloc.type === 'liste' && !rupture && l.x > bloc.xItem + 2) {
+      // Suite d'un élément de liste (ligne en retrait)
+      const i = bloc.items.length - 1;
+      bloc.items[i] = joindrePdf(bloc.items[i], l.texte);
+    } else if (bloc && bloc.type === 'para' && !rupture && !LETTRE_PDF.test(l.texte)) {
+      bloc.texte = ligneCourte(prec) && !/-$/.test(bloc.texte) ? bloc.texte + '\n' + l.texte : joindrePdf(bloc.texte, l.texte);
+    } else {
+      fermer();
+      bloc = { type: 'para', texte: l.texte };
+    }
+    bloc.derniere = l;
+  }
+  fermer();
+  return blocs;
+}
+
+// .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
   const pdf  = await loadingTask.promise;
@@ -616,40 +765,33 @@ async function convPdf(ab, nom) {
   try {
     // Extraire toutes les pages en parallèle (le worker PDF.js pipeline les
     // requêtes) plutôt qu'en attendant chaque page l'une après l'autre.
-    const contenus = await Promise.all(
+    const pages = await Promise.all(
       Array.from({ length: pdf.numPages }, (_, i) =>
-        pdf.getPage(i + 1).then(page => page.getTextContent())
+        pdf.getPage(i + 1).then(async page => {
+          const [, y0, , y1] = page.view;   // boîte de la page : [x0, y0, x1, y1]
+          return { bas: Math.min(y0, y1), haut: Math.max(y0, y1), hauteur: Math.abs(y1 - y0),
+                   lignes: lignesPdf((await page.getTextContent()).items) };
+        })
       )
     );
 
-    const blocs = [`# ${baseName(nom)}\n`];
-    let totalChars = 0;
-
-    contenus.forEach((tc, i) => {
-      // Regrouper les items par position Y (tolérance 2 unités)
-      const carte = new Map();
-      for (const item of tc.items) {
-        const y = Math.round(item.transform[5] / 2) * 2;
-        if (!carte.has(y)) carte.set(y, []);
-        carte.get(y).push({ x: item.transform[4], t: item.str });
-      }
-
-      // Trier Y décroissant (haut → bas de la page)
-      const lignes = [...carte.keys()]
-        .sort((a, b) => b - a)
-        .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(it => it.t).join(' ').trim())
-        .filter(l => l.length > 0);
-
-      totalChars += lignes.join('').length;
-      blocs.push(`\n---\n\n## Page ${i + 1}\n\n${lignes.join('\n')}`);
-    });
-
     // Détecter un PDF scanné
+    const totalChars = pages.reduce((n, p) => n + p.lignes.reduce((m, l) => m + l.texte.length, 0), 0);
     if (totalChars < SEUIL_PDF_SCAN) {
       return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
     }
 
-    return blocs.join('').trim() + '\n';
+    retirerEntetesPieds(pages);
+    const corps   = tailleCorps(pages);
+    const niveaux = niveauxTitres(pages, corps);
+
+    // Repères de page discrets (hors plan du document) pour pouvoir citer une page
+    const blocs = [`# ${baseName(nom)}`];
+    pages.forEach((p, i) => {
+      if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
+      blocs.push(...blocsPage(p, corps, niveaux));
+    });
+    return blocs.join('\n\n') + '\n';
   } finally {
     // Libérer le document côté worker : sans cela, chaque PDF converti
     // reste en mémoire jusqu'à la fermeture de l'onglet.
