@@ -1,0 +1,17 @@
+{
+  "name": "convert-to-markdown",
+  "private": true,
+  "description": "Outillage de TEST uniquement. L'application (index.html) n'a aucune dépendance et ne nécessite aucun build.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "jszip": "3.10.1",
+    "mammoth": "1.6.0",
+    "papaparse": "5.4.1",
+    "pdfjs-dist": "3.11.174",
+    "turndown": "7.1.2",
+    "xlsx": "0.18.5"
+  }
+}

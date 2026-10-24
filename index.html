@@ -196,6 +196,11 @@
     }
     .apercu-titre { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .apercu-header-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+    .apercu-note {
+      background: #fefce8; color: #854d0e;
+      border-bottom: 1px solid #fde047;
+      font-size: .8rem; padding: .5rem 1rem;
+    }
     .apercu-contenu {
       flex: 1; overflow: auto;
       padding: 1rem; font-size: .82rem;
@@ -265,6 +270,7 @@
         <button class="btn btn-secondaire btn-petit" id="btn-fermer-apercu"><span aria-hidden="true">✖</span> Fermer</button>
       </div>
     </div>
+    <p class="apercu-note" id="apercu-note" role="status" hidden></p>
     <pre class="apercu-contenu" id="apercu-contenu" tabindex="0"></pre>
   </div>
 </div>
@@ -322,28 +328,104 @@ function detecterEtDecoder(ab) {
   }
 }
 
+// &amp; en dernier : sinon « &amp;lt; » (le texte littéral « &lt; ») deviendrait « < »
 function desescaperXml(s) {
   return s
-    .replace(/&amp;/g,  '&')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g,         (_, n) => String.fromCodePoint(Number(n)))
     .replace(/&lt;/g,   '<')
     .replace(/&gt;/g,   '>')
     .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"');
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g,  '&');
+}
+
+// Extension de fichier d'une image d'après son type MIME (image/jpeg → jpg)
+function extensionImage(type) {
+  const sous = (String(type || '').split(';')[0].split('/')[1] || '').toLowerCase();
+  return ({ jpeg: 'jpg', 'svg+xml': 'svg', 'x-emf': 'emf', 'x-wmf': 'wmf', tiff: 'tif' })[sous]
+    || sous.replace(/[^a-z0-9]/g, '') || 'bin';
+}
+
+// Les convertisseurs renvoient soit du texte, soit { md, images } quand le document
+// contient des images (images : [{ chemin, type, data: ArrayBuffer }], chemin relatif
+// au fichier .md). Cette fonction ramène les deux cas à la seconde forme.
+const normaliserResultat = r => typeof r === 'string' ? { md: r, images: [] } : { md: r.md, images: r.images || [] };
+
+// Conventions d'affichage des nombres et dates : comme Excel suit la langue du
+// système, on suit celle du navigateur (1 234,50 € et 15/03/2026 en français).
+// Dans le worker, LANGUE_PAGE est fournie par la page (voir creerBlobTravailleur).
+const AFFICHAGE_FR = /^fr\b/i.test(
+  (typeof LANGUE_PAGE !== 'undefined' ? LANGUE_PAGE : typeof navigator !== 'undefined' && navigator.language) || '');
+
+// Formats de date intégrés d'Excel dont l'affichage dépend de la langue
+// (« date courte » n° 14 et 22) : SheetJS les rend à l'américaine (3/15/26).
+const FORMATS_DATE_LOCAUX = new Set(['m/d/yy', 'm/d/yy h:mm']);
+
+const deuxChiffres = n => String(n).padStart(2, '0');
+
+// 1,234.50 → 1 234,50 (uniquement dans les suites de chiffres, pas dans le texte du format)
+const separateursFr = s => s.replace(/\d[\d,.]*\d|\d/g, n => n.replace(/[,.]/g, c => c === ',' ? ' ' : ','));
+
+function texteDate(cell, format) {
+  if (!AFFICHAGE_FR || !(cell.t === 'd' || FORMATS_DATE_LOCAUX.has(format))) {
+    return cell.w != null ? cell.w : String(cell.v);
+  }
+  let j, m, a, h = 0, mi = 0;
+  if (cell.t === 'd') {
+    const d = cell.v; j = d.getDate(); m = d.getMonth() + 1; a = d.getFullYear(); h = d.getHours(); mi = d.getMinutes();
+  } else {
+    const p = XLSX.SSF.parse_date_code(cell.v); j = p.d; m = p.m; a = p.y; h = p.H; mi = p.M;
+  }
+  const date = `${deuxChiffres(j)}/${deuxChiffres(m)}/${a}`;
+  return /h/i.test(format) || (cell.t === 'd' && (h || mi)) ? `${date} ${deuxChiffres(h)}:${deuxChiffres(mi)}` : date;
+}
+
+// Valeur d'une cellule telle qu'affichée dans le tableur (dates, montants, %),
+// et non sa valeur brute (46096 au lieu de 15/03/2026, 0.205 au lieu de 20,5 %).
+function texteCellule(cell) {
+  if (!cell) return '';
+  const format = cell.z || 'General';
+  if (cell.t === 'd' || (cell.t === 'n' && XLSX.SSF.is_date(format))) return texteDate(cell, format);
+  if (cell.t === 'n') {
+    const w = cell.w != null ? cell.w : XLSX.SSF.format(format, cell.v);
+    return AFFICHAGE_FR ? separateursFr(w) : w;
+  }
+  if (cell.w != null) return cell.w;
+  return cell.v == null ? '' : String(cell.v);
+}
+
+// Lignes d'une feuille, en ignorant les lignes et colonnes vides en fin de plage
+// (souvent étendue par une simple mise en forme).
+function lignesFeuille(ws) {
+  if (!ws || !ws['!ref']) return [];
+  const plage  = XLSX.utils.decode_range(ws['!ref']);
+  const lignes = [];
+  let derniereCol = -1;
+  for (let r = plage.s.r; r <= plage.e.r; r++) {
+    const ligne = [];
+    for (let c = plage.s.c; c <= plage.e.c; c++) {
+      const v = texteCellule(ws[XLSX.utils.encode_cell({ r, c })]);
+      if (v !== '' && c - plage.s.c > derniereCol) derniereCol = c - plage.s.c;
+      ligne.push(v);
+    }
+    lignes.push(ligne);
+  }
+  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
+  return lignes.map(l => l.slice(0, derniereCol + 1));
 }
 
 // .xlsx / .xls / .ods → Markdown (SheetJS)
 async function convTableur(ab, nom) {
+  // cellNF : conserver le format de chaque cellule (dates, montants, %).
   // cellHTML/cellFormula désactivés : seules les valeurs affichées nous
   // intéressent — moins de travail de parsing et de mémoire sur les gros classeurs.
-  const wb    = XLSX.read(ab, { type: 'buffer', cellHTML: false, cellFormula: false });
+  const wb    = XLSX.read(ab, { type: 'buffer', cellNF: true, cellHTML: false, cellFormula: false });
   const blocs = [`# ${baseName(nom)}\n`];
 
   for (const sheetName of wb.SheetNames) {
-    const ws   = wb.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const rows = lignesFeuille(wb.Sheets[sheetName]);
     blocs.push(`\n## Feuille : ${sheetName}\n`);
-    // construireTableMd convertit déjà chaque cellule en chaîne : pas besoin
-    // de dupliquer toutes les lignes avec un .map(String) préalable.
     blocs.push(rows.length ? construireTableMd(rows) : '_(feuille vide)_');
   }
   return blocs.join('\n') + '\n';
@@ -359,37 +441,172 @@ async function convCsv(ab, nom) {
   return `# ${baseName(nom)}\n\n${construireTableMd(rows)}\n`;
 }
 
-// .pptx → Markdown (JSZip + parsing XML)
-async function convPptx(ab, nom) {
-  const zip = await JSZip.loadAsync(ab);
+// ---- PowerPoint (.pptx) ----
 
-  const slideKeys = Object.keys(zip.files)
-    .filter(p => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
-    .sort((a, b) => {
-      const na = parseInt((a.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
-      const nb = parseInt((b.match(/slide(\d+)\.xml/i) || [0, 0])[1]);
-      return na - nb;
+// Valeur d'un attribut XML dans une balise ouvrante (ordre des attributs libre)
+const attributXml = (balise, nom) => {
+  const m = balise.match(new RegExp(`\\s${nom}="([^"]*)"`));
+  return m ? desescaperXml(m[1]) : null;
+};
+
+// Cible relative d'une relation → chemin dans l'archive (« ../media/a.png »
+// depuis ppt/slides/slide1.xml → ppt/media/a.png)
+function resoudreChemin(source, cible) {
+  if (cible.startsWith('/')) return cible.slice(1);
+  const parties = source.split('/').slice(0, -1);
+  for (const p of cible.split('/')) {
+    if (p === '..') parties.pop();
+    else if (p && p !== '.') parties.push(p);
+  }
+  return parties.join('/');
+}
+
+// Relations d'une partie (fichier _rels/<nom>.rels) : rId → { type, cible }
+async function relationsPptx(zip, chemin) {
+  const i = chemin.lastIndexOf('/');
+  const f = zip.file(`${chemin.slice(0, i)}/_rels/${chemin.slice(i + 1)}.rels`);
+  const rels = new Map();
+  if (!f) return rels;
+  for (const [balise] of (await f.async('text')).matchAll(/<Relationship\b[^>]*>/g)) {
+    if (attributXml(balise, 'TargetMode') === 'External') continue;
+    rels.set(attributXml(balise, 'Id'), {
+      type: (attributXml(balise, 'Type') || '').split('/').pop(),
+      cible: resoudreChemin(chemin, attributXml(balise, 'Target') || ''),
     });
+  }
+  return rels;
+}
 
-  if (!slideKeys.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
+// Ordre réel des diapositives : celui de presentation.xml. Les noms de fichiers
+// (slide1.xml, slide2.xml…) gardent l'ordre de création et ne changent pas quand
+// on réorganise la présentation.
+async function ordreDiapos(zip) {
+  const pres = zip.file('ppt/presentation.xml');
+  if (pres) {
+    const rels = await relationsPptx(zip, 'ppt/presentation.xml');
+    const ordre = [...(await pres.async('text')).matchAll(/<p:sldId\b[^>]*>/g)]
+      .map(([balise]) => rels.get(attributXml(balise, 'r:id')))
+      .filter(r => r && zip.file(r.cible))
+      .map(r => r.cible);
+    if (ordre.length) return ordre;
+  }
+  const numero = p => parseInt((p.match(/slide(\d+)\.xml$/i) || [0, 0])[1], 10);
+  return Object.keys(zip.files).filter(p => /^ppt\/slides\/slide\d+\.xml$/i.test(p)).sort((a, b) => numero(a) - numero(b));
+}
 
-  // Décompresser toutes les diapositives en parallèle plutôt qu'une par une
-  const xmls  = await Promise.all(slideKeys.map(k => zip.files[k].async('text')));
-  const blocs = [`# ${baseName(nom)}\n`];
+// Texte d'un paragraphe DrawingML (<a:p>) ; les sauts de ligne deviennent des espaces.
+// <a:t(\s…)?> et non <a:t…> : ne pas confondre avec <a:tab/>, <a:tbl>, <a:tc>, <a:tr>.
+function texteParagraphePptx(p) {
+  const runs = p.replace(/<a:br\b[^>]*\/>/g, '<a:t> </a:t>').match(/<a:t(?:\s[^>]*)?>[\s\S]*?<\/a:t>/g) || [];
+  return desescaperXml(runs.map(r => r.replace(/<[^>]+>/g, '')).join('')).replace(/\s+/g, ' ').trim();
+}
 
-  for (let i = 0; i < xmls.length; i++) {
-    const xml = xmls[i];
-    blocs.push(`\n## Diapositive ${i + 1}\n`);
+const paragraphesPptx = xml => xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
 
-    const paragraphes = xml.match(/<a:p[ >][\s\S]*?<\/a:p>/g) || [];
-    for (const para of paragraphes) {
-      const textes = [...para.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map(m => desescaperXml(m[1]));
-      const ligne  = textes.join('').trim();
-      if (ligne) blocs.push(`- ${ligne}`);
+// Espaces réservés sans contenu utile dans un export texte
+const ESPACES_IGNORES = new Set(['dt', 'ftr', 'sldNum', 'hdr', 'sldImg']);
+
+// Forme texte (<p:sp>) → { titre } ou { lignes } (puces avec niveaux, ou paragraphes)
+function formeTextePptx(sp) {
+  const ph = sp.match(/<p:ph\b[^>]*>/);
+  const typePh = ph ? (attributXml(ph[0], 'type') || 'body') : null;
+  if (typePh && ESPACES_IGNORES.has(typePh)) return null;
+
+  const paras = paragraphesPptx(sp)
+    .map(p => ({ xml: p, texte: texteParagraphePptx(p) }))
+    .filter(p => p.texte);
+  if (!paras.length) return null;
+  if (typePh === 'title' || typePh === 'ctrTitle') return { titre: paras.map(p => p.texte).join(' ') };
+
+  // Puces : par défaut dans les zones de contenu (héritées du masque), jamais
+  // dans les zones de texte libres sauf puce explicite ; <a:buNone/> les retire.
+  const pucesParDefaut = typePh === 'body' || typePh === 'obj';
+  const lignes = paras.map(({ xml, texte }) => {
+    const pPr  = (xml.match(/<a:pPr\b[^>]*\/?>/) || [''])[0];
+    const puce = !/<a:buNone\b/.test(xml) && (pucesParDefaut || /<a:bu(?:Char|AutoNum)\b/.test(xml));
+    const niveau = Number(attributXml(pPr, 'lvl') || 0);
+    return puce ? '  '.repeat(niveau) + '- ' + texte : texte;
+  });
+  return { lignes };
+}
+
+// Tableau (<a:tbl>) → tableau Markdown ; cellules fusionnées laissées vides
+function tableauPptx(xml) {
+  const lignes = (xml.match(/<a:tr\b[\s\S]*?<\/a:tr>/g) || []).map(tr =>
+    (tr.match(/<a:tc\b[\s\S]*?<\/a:tc>/g) || []).map(tc =>
+      /^<a:tc\b[^>]*\b[hv]Merge="(?:1|true)"/.test(tc) ? '' : paragraphesPptx(tc).map(texteParagraphePptx).filter(Boolean).join(' ')));
+  return lignes.length ? construireTableMd(lignes) : null;
+}
+
+const TYPES_IMAGE = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp',
+                      svg: 'image/svg+xml', tif: 'image/tiff', tiff: 'image/tiff', emf: 'image/x-emf', wmf: 'image/x-wmf' };
+
+// .pptx → Markdown (JSZip + parsing XML)
+async function convPptx(ab, nom, ctx) {
+  const zip = await JSZip.loadAsync(ab);
+  const chemins = await ordreDiapos(zip);
+  if (!chemins.length) throw new Error('Aucune diapositive trouvée dans ce fichier PPTX.');
+
+  // Décompresser toutes les diapositives (et leurs relations) en parallèle
+  const diapos = await Promise.all(chemins.map(async c => ({
+    xml: await zip.file(c).async('text'),
+    rels: await relationsPptx(zip, c),
+  })));
+
+  const images = [];
+  const imageParMedia = new Map();   // une image réutilisée n'est extraite qu'une fois
+  const blocs = [`# ${baseName(nom)}`];
+
+  for (let i = 0; i < diapos.length; i++) {
+    // mc:Fallback répète le contenu de mc:Choice pour les anciennes versions
+    const xml = diapos[i].xml.replace(/<mc:Fallback\b[\s\S]*?<\/mc:Fallback>/g, '');
+    const { rels } = diapos[i];
+    const contenu = [];
+    let titre = null;
+
+    // Formes dans l'ordre du document (celles des groupes comprises)
+    for (const [forme, genre] of xml.matchAll(/<p:(sp|pic|graphicFrame)\b[\s\S]*?<\/p:\1>/g)) {
+      if (genre === 'sp') {
+        const r = formeTextePptx(forme);
+        if (!r) continue;
+        if (r.titre && titre === null) titre = r.titre;
+        else if (r.titre) contenu.push(`**${r.titre}**`);
+        else contenu.push(r.lignes.join(r.lignes.every(l => /^\s*- /.test(l)) ? '\n' : '\n\n'));
+      } else if (genre === 'graphicFrame') {
+        const tableau = /<a:tbl\b/.test(forme) && tableauPptx(forme);
+        if (tableau) contenu.push(tableau);
+      } else {
+        const blip = forme.match(/<a:blip\b[^>]*>/);
+        const rel  = blip && rels.get(attributXml(blip[0], 'r:embed'));
+        const media = rel && zip.file(rel.cible);
+        if (!media) continue;
+        if (!imageParMedia.has(rel.cible)) {
+          const ext = (rel.cible.split('.').pop() || 'bin').toLowerCase();
+          const img = { chemin: `${ctx.dossierImages}/image${images.length + 1}.${ext}`, type: TYPES_IMAGE[ext] || '',
+                        data: await media.async('arraybuffer') };
+          images.push(img);
+          imageParMedia.set(rel.cible, img.chemin);
+        }
+        const descr = attributXml((forme.match(/<p:cNvPr\b[^>]*>/) || [''])[0], 'descr') || '';
+        contenu.push(`![${descr.replace(/[[\]]/g, '')}](${imageParMedia.get(rel.cible)})`);
+      }
     }
+
+    // Notes de l'orateur (zone « body » de la page de notes)
+    const relNotes = [...rels.values()].find(r => r.type === 'notesSlide');
+    const fichierNotes = relNotes && zip.file(relNotes.cible);
+    if (fichierNotes) {
+      const corps = ((await fichierNotes.async('text')).match(/<p:sp\b[\s\S]*?<\/p:sp>/g) || [])
+        .filter(sp => /<p:ph\b[^>]*\stype="body"/.test(sp));
+      const notes = corps.flatMap(sp => paragraphesPptx(sp).map(texteParagraphePptx)).filter(Boolean);
+      if (notes.length) contenu.push('> **Notes de l\'orateur :** ' + notes.join('\n>\n> '));
+    }
+
+    const masquee = /<p:sld\b[^>]*\sshow="(?:0|false)"/.test(xml) ? ' *(masquée)*' : '';
+    blocs.push(`## Diapositive ${i + 1}${titre ? ' : ' + titre : ''}${masquee}`, ...contenu);
   }
 
-  return blocs.join('\n') + '\n';
+  return { md: blocs.join('\n\n') + '\n', images };
 }
 </script>
 
@@ -416,7 +633,7 @@ const FORMATS_REFUSES = {
 // Registre des convertisseurs (construit après chargement des bibliothèques)
 let CONVERTISSEURS = {};
 
-// Résultats en mémoire [{nom, md, statut}]
+// Résultats en mémoire [{ nom, nomMd, md, images }]
 let resultats = [];
 
 // =====================================================================
@@ -438,23 +655,36 @@ function lireCommeArrayBuffer(fichier) {
   });
 }
 
-function ecapperCellule(s) {
-  return String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, '<br>').replace(/\r/g, '').trim();
+// Noms de sortie uniques pour la session, réservés au dépôt du fichier : deux
+// « rapport.* » donnent rapport.md et rapport_2.md, chacun avec son propre dossier
+// d'images. Comparaison sans casse (Windows et macOS ne distinguent pas Rapport
+// de rapport à l'extraction du ZIP). Réinitialisés par « Vider ».
+const nomsSortie     = new Set();
+const dossiersImages = new Set();
+
+function reserverUnique(ensemble, base) {
+  let candidat = base, n = 2;
+  while (ensemble.has(candidat.toLowerCase())) candidat = `${base}_${n++}`;
+  ensemble.add(candidat.toLowerCase());
+  return candidat;
 }
 
-function construireTableMd(rows) {
-  if (!rows || !rows.length) return '_(vide)_';
-  // reduce au lieu de Math.max(...spread) : ce dernier plante au-delà de ~100k lignes
-  // (dépassement de la pile d'appels). Crucial pour les gros exports Excel/CSV.
-  const nbCols = rows.reduce((m, r) => r.length > m ? r.length : m, 0);
-  const pad = r => { const c = [...r]; while (c.length < nbCols) c.push(''); return c; };
-  const toRow = r => '| ' + pad(r).map(ecapperCellule).join(' | ') + ' |';
-  const sep   = '|' + Array(nbCols).fill(' --- ').join('|') + '|';
-  return [toRow(rows[0]), sep, ...rows.slice(1).map(toRow)].join('\n');
+function reserverSortie(nom) {
+  const base = reserverUnique(nomsSortie, baseName(nom));
+  // Dossier d'images sans espaces ni caractères qui casseraient un lien Markdown
+  const slug = base.replace(/[\s()[\]<>#%?"'`\\]+/g, '-').replace(/^-+|-+$/g, '') || 'document';
+  const dossier = reserverUnique(dossiersImages, slug);
+  return { base, dossier, nomMd: base + '.md', dossierImages: 'images/' + dossier };
 }
 
+function libererSortie(sortie) {
+  nomsSortie.delete(sortie.base.toLowerCase());
+  dossiersImages.delete(sortie.dossier.toLowerCase());
+}
+
+// contenu : texte (Markdown) ou Blob déjà construit (archive ZIP)
 function telechargerBlob(contenu, nom) {
-  const blob = new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
+  const blob = contenu instanceof Blob ? contenu : new Blob([contenu], { type: 'text/markdown;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), { href: url, download: nom });
   document.body.appendChild(a);
@@ -499,13 +729,173 @@ function creerTurndown() {
   return td;
 }
 
-// .docx → Markdown (mammoth + Turndown)
-async function convDocx(ab) {
-  const res = await mammoth.convertToHtml({ arrayBuffer: ab });
-  return creerTurndown().turndown(res.value);
+// .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
+// (ctx.dossierImages) au lieu d'être recopiées en base64 dans le Markdown, ce
+// qui le rendait illisible et pouvait le faire peser plusieurs Mo.
+async function convDocx(ab, nom, ctx) {
+  const images = [];
+  const res = await mammoth.convertToHtml({ arrayBuffer: ab }, {
+    convertImage: mammoth.images.imgElement(image => {
+      // Place réservée dès l'appel : la numérotation suit l'ordre du document
+      const entree = { chemin: `${ctx.dossierImages}/image${images.length + 1}.${extensionImage(image.contentType)}`,
+                       type: image.contentType, data: null };
+      images.push(entree);
+      return image.readAsArrayBuffer().then(data => { entree.data = data; return { src: entree.chemin }; });
+    }),
+  });
+  return { md: creerTurndown().turndown(res.value), images };
 }
 
-// .pdf → Markdown (PDF.js, extraction texte par page)
+// ---- PDF : reconstruction de la structure ----
+// PDF.js ne fournit que des fragments de texte positionnés. On reconstruit les
+// lignes, puis les paragraphes, titres et listes à partir de la géométrie.
+
+// Taille arrondie au demi-point, pour regrouper les tailles quasi identiques
+const taillePdf = t => Math.round(t * 2) / 2;
+
+// Fragments → lignes { texte, y, x, fin, taille }, de haut en bas
+function lignesPdf(items) {
+  const frags = items
+    .filter(it => it.str && it.str.trim())
+    .map(it => {
+      const taille = Math.hypot(it.transform[2], it.transform[3]) || it.height || 0;
+      return { t: it.str, x: it.transform[4], y: it.transform[5], fin: it.transform[4] + (it.width || 0), taille };
+    })
+    .sort((a, b) => b.y - a.y || a.x - b.x);
+
+  // Même ligne si l'écart vertical est faible devant la taille de police
+  // (garde les exposants comme « 1er » sur leur ligne)
+  const groupes = [];
+  for (const f of frags) {
+    const g = groupes[groupes.length - 1];
+    if (g && Math.abs(g.y - f.y) <= Math.max(2, 0.4 * Math.max(g.taille, f.taille))) {
+      g.frags.push(f);
+      if (f.taille > g.taille) { g.taille = f.taille; g.y = f.y; }
+    } else {
+      groupes.push({ y: f.y, taille: f.taille, frags: [f] });
+    }
+  }
+
+  return groupes.map(g => {
+    g.frags.sort((a, b) => a.x - b.x);
+    // Espace seulement si un vrai blanc sépare deux fragments : un mot découpé
+    // en plusieurs fragments n'est plus coupé en deux.
+    let texte = '';
+    let finPrec = null;
+    for (const f of g.frags) {
+      if (finPrec !== null && f.x - finPrec > 0.15 * f.taille && !/\s$/.test(texte) && !/^\s/.test(f.t)) texte += ' ';
+      texte += f.t;
+      finPrec = f.fin;
+    }
+    return { texte: texte.replace(/\s+/g, ' ').trim(), y: g.y, x: g.frags[0].x,
+             fin: g.frags[g.frags.length - 1].fin, taille: g.taille };
+  }).filter(l => l.texte);
+}
+
+// Retire les en-têtes et pieds de page répétés (dont les numéros de page) :
+// lignes situées dans les 10 % du haut ou du bas, identiques chiffres mis à
+// part, présentes sur au moins 60 % des pages (et 3 pages minimum).
+function retirerEntetesPieds(pages) {
+  if (pages.length < 3) return;
+  const enMarge = (l, p) => l.y > p.haut - 0.1 * p.hauteur || l.y < p.bas + 0.1 * p.hauteur;
+  const cle = l => l.texte.replace(/\d+/g, '#');
+  const compte = new Map();
+  for (const p of pages) {
+    for (const k of new Set(p.lignes.filter(l => enMarge(l, p)).map(cle))) compte.set(k, (compte.get(k) || 0) + 1);
+  }
+  const seuil = Math.max(3, Math.ceil(pages.length * 0.6));
+  for (const p of pages) p.lignes = p.lignes.filter(l => !(enMarge(l, p) && compte.get(cle(l)) >= seuil));
+}
+
+// Taille du corps de texte : celle qui porte le plus de caractères
+function tailleCorps(pages) {
+  const poids = new Map();
+  for (const p of pages) for (const l of p.lignes) poids.set(taillePdf(l.taille), (poids.get(taillePdf(l.taille)) || 0) + l.texte.length);
+  const plusLourde = [...poids].sort((a, b) => b[1] - a[1])[0];
+  return plusLourde ? plusLourde[0] : 12;
+}
+
+const estTitrePdf = (l, corps) => l.taille >= corps * 1.15 && l.texte.length <= 120 && /\p{L}/u.test(l.texte);
+
+// Niveau Markdown de chaque taille de titre : la plus grande → ##, puis ###, puis ####
+function niveauxTitres(pages, corps) {
+  const tailles = new Set();
+  for (const p of pages) for (const l of p.lignes) if (estTitrePdf(l, corps)) tailles.add(taillePdf(l.taille));
+  return new Map([...tailles].sort((a, b) => b - a).map((t, i) => [t, Math.min(2 + i, 4)]));
+}
+
+const PUCE_PDF   = /^(?:[•◦▪▫●○■□➢➤►]\s*|[-–*]\s+)/;   //  : puce Symbol/Wingdings
+const NUMERO_PDF = /^\d{1,3}[.)]\s/;                              // 1. ou 2)
+const LETTRE_PDF = /^[a-z][)]\s/i;                                // a) : nouveau paragraphe
+
+// Fin de ligne avec césure (« trans- / port ») : on garde le trait d'union et on
+// colle, ce qui reste juste pour les mots composés (porte-monnaie).
+const joindrePdf = (a, b) => /\p{L}-$/u.test(a) && /^\p{Ll}/u.test(b) ? a + b : a + ' ' + b;
+
+// Lignes d'une page → blocs Markdown (titres, paragraphes, listes)
+function blocsPage(p, corps, niveaux) {
+  const lignes = p.lignes;
+  // Interligne habituel : médiane des écarts entre lignes consécutives
+  const ecarts = [];
+  for (let i = 1; i < lignes.length; i++) { const e = lignes[i - 1].y - lignes[i].y; if (e > 0) ecarts.push(e); }
+  ecarts.sort((a, b) => a - b);
+  const interligne = ecarts.length ? ecarts[Math.floor(ecarts.length / 2)] : corps * 1.2;
+  // Bord droit du texte : une ligne qui s'arrête nettement avant est un retour
+  // à la ligne voulu (adresse, signature), conservé tel quel.
+  const bordDroit = lignes.reduce((m, l) => Math.max(m, l.fin), 0);
+  const bordGauche = lignes.reduce((m, l) => Math.min(m, l.x), Infinity);
+  const ligneCourte = l => l.fin < bordDroit - 0.3 * (bordDroit - bordGauche);
+
+  const blocs = [];
+  let bloc = null;   // { type: 'titre'|'para'|'liste', texte|items, derniere, niveau, xItem }
+  const fermer = () => {
+    if (!bloc) return;
+    if (bloc.type === 'titre') blocs.push('#'.repeat(bloc.niveau) + ' ' + bloc.texte);
+    else if (bloc.type === 'liste') blocs.push(bloc.items.join('\n'));
+    else blocs.push(bloc.texte);
+    bloc = null;
+  };
+
+  for (const l of lignes) {
+    const prec   = bloc && bloc.derniere;
+    const ecart  = prec ? prec.y - l.y : 0;
+    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15;
+    const niveau = estTitrePdf(l, corps) && niveaux.get(taillePdf(l.taille));
+
+    if (niveau) {
+      // Titre sur plusieurs lignes : même niveau, lignes rapprochées
+      if (bloc && bloc.type === 'titre' && bloc.niveau === niveau && ecart <= l.taille * 1.6) {
+        bloc.texte += ' ' + l.texte;
+      } else {
+        fermer();
+        bloc = { type: 'titre', niveau, texte: l.texte };
+      }
+    } else if (PUCE_PDF.test(l.texte) || NUMERO_PDF.test(l.texte)) {
+      const puce  = l.texte.match(PUCE_PDF);
+      const item  = puce ? '- ' + l.texte.slice(puce[0].length) : l.texte;
+      const genre = puce ? 'puces' : 'numeros';
+      // Changement de type de liste : nouveau bloc, sinon Markdown rattacherait
+      // « 2. … » à l'élément à puce précédent
+      if (bloc && bloc.type === 'liste' && bloc.genre === genre && ecart <= interligne * 2.5) bloc.items.push(item);
+      else { fermer(); bloc = { type: 'liste', genre, items: [item] }; }
+      bloc.xItem = l.x;
+    } else if (bloc && bloc.type === 'liste' && !rupture && l.x > bloc.xItem + 2) {
+      // Suite d'un élément de liste (ligne en retrait)
+      const i = bloc.items.length - 1;
+      bloc.items[i] = joindrePdf(bloc.items[i], l.texte);
+    } else if (bloc && bloc.type === 'para' && !rupture && !LETTRE_PDF.test(l.texte)) {
+      bloc.texte = ligneCourte(prec) && !/-$/.test(bloc.texte) ? bloc.texte + '\n' + l.texte : joindrePdf(bloc.texte, l.texte);
+    } else {
+      fermer();
+      bloc = { type: 'para', texte: l.texte };
+    }
+    bloc.derniere = l;
+  }
+  fermer();
+  return blocs;
+}
+
+// .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
   const pdf  = await loadingTask.promise;
@@ -513,40 +903,33 @@ async function convPdf(ab, nom) {
   try {
     // Extraire toutes les pages en parallèle (le worker PDF.js pipeline les
     // requêtes) plutôt qu'en attendant chaque page l'une après l'autre.
-    const contenus = await Promise.all(
+    const pages = await Promise.all(
       Array.from({ length: pdf.numPages }, (_, i) =>
-        pdf.getPage(i + 1).then(page => page.getTextContent())
+        pdf.getPage(i + 1).then(async page => {
+          const [, y0, , y1] = page.view;   // boîte de la page : [x0, y0, x1, y1]
+          return { bas: Math.min(y0, y1), haut: Math.max(y0, y1), hauteur: Math.abs(y1 - y0),
+                   lignes: lignesPdf((await page.getTextContent()).items) };
+        })
       )
     );
 
-    const blocs = [`# ${baseName(nom)}\n`];
-    let totalChars = 0;
-
-    contenus.forEach((tc, i) => {
-      // Regrouper les items par position Y (tolérance 2 unités)
-      const carte = new Map();
-      for (const item of tc.items) {
-        const y = Math.round(item.transform[5] / 2) * 2;
-        if (!carte.has(y)) carte.set(y, []);
-        carte.get(y).push({ x: item.transform[4], t: item.str });
-      }
-
-      // Trier Y décroissant (haut → bas de la page)
-      const lignes = [...carte.keys()]
-        .sort((a, b) => b - a)
-        .map(y => carte.get(y).sort((a, b) => a.x - b.x).map(it => it.t).join(' ').trim())
-        .filter(l => l.length > 0);
-
-      totalChars += lignes.join('').length;
-      blocs.push(`\n---\n\n## Page ${i + 1}\n\n${lignes.join('\n')}`);
-    });
-
     // Détecter un PDF scanné
+    const totalChars = pages.reduce((n, p) => n + p.lignes.reduce((m, l) => m + l.texte.length, 0), 0);
     if (totalChars < SEUIL_PDF_SCAN) {
       return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
     }
 
-    return blocs.join('').trim() + '\n';
+    retirerEntetesPieds(pages);
+    const corps   = tailleCorps(pages);
+    const niveaux = niveauxTitres(pages, corps);
+
+    // Repères de page discrets (hors plan du document) pour pouvoir citer une page
+    const blocs = [`# ${baseName(nom)}`];
+    pages.forEach((p, i) => {
+      if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
+      blocs.push(...blocsPage(p, corps, niveaux));
+    });
+    return blocs.join('\n\n') + '\n';
   } finally {
     // Libérer le document côté worker : sans cela, chaque PDF converti
     // reste en mémoire jusqu'à la fermeture de l'onglet.
@@ -561,12 +944,27 @@ async function convTxt(ab, nom) {
 }
 
 // .html / .htm → Markdown (Turndown)
-async function convHtml(ab) {
+async function convHtml(ab, nom, ctx) {
   const texte = detecterEtDecoder(ab);
   const doc   = new DOMParser().parseFromString(texte, 'text/html');
   // Retirer le code non visible : son contenu textuel polluerait le Markdown
   doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-  return creerTurndown().turndown(doc.body.innerHTML);
+
+  // Images intégrées (src="data:…") : extraites en fichiers, comme pour Word.
+  // Les images désignées par une URL sont laissées telles quelles.
+  const images = [];
+  for (const img of doc.querySelectorAll('img[src^="data:"]')) {
+    try {
+      const rep  = await fetch(img.getAttribute('src'));
+      const type = rep.headers.get('content-type') || '';
+      const chemin = `${ctx.dossierImages}/image${images.length + 1}.${extensionImage(type)}`;
+      images.push({ chemin, type, data: await rep.arrayBuffer() });
+      img.setAttribute('src', chemin);
+    } catch {
+      img.remove();   // data: illisible → on l'omet plutôt que de recopier un bloc base64
+    }
+  }
+  return { md: creerTurndown().turndown(doc.body.innerHTML), images };
 }
 
 // =====================================================================
@@ -590,7 +988,8 @@ const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
 };
 
 // Corps du worker : importe les libs (chacune isolée → disponibilité partielle
-// possible), puis répond aux requêtes {id, ext, nom, ab} par {id, ok, md|erreur}.
+// possible), puis répond aux requêtes {id, ext, nom, ab, ctx} par
+// {id, ok, md, images} ou {id, ok: false, erreur}.
 // La poignée de main {type:'pret', exts} annonce les extensions réellement gérées.
 const BOOTSTRAP_TRAVAILLEUR = `
 const CONVERTISSEURS_W = {};
@@ -598,11 +997,12 @@ try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_
 try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
 try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; } catch (e) {}
 self.onmessage = async (e) => {
-  const { id, ext, nom, ab } = e.data;
+  const { id, ext, nom, ab, ctx } = e.data;
   try {
     const conv = CONVERTISSEURS_W[ext];
     if (!conv) throw new Error('Convertisseur indisponible dans le worker : ' + ext);
-    self.postMessage({ id, ok: true, md: await conv(ab, nom) });
+    const { md, images } = normaliserResultat(await conv(ab, nom, ctx));
+    self.postMessage({ id, ok: true, md, images }, images.map(i => i.data)); // images transférées
   } catch (err) {
     self.postMessage({ id, ok: false, erreur: (err && err.message) || String(err) });
   }
@@ -610,10 +1010,13 @@ self.onmessage = async (e) => {
 self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
 `;
 
-// Construit le blob du worker : URLs + code partagé (réutilisé tel quel) + bootstrap.
+// Construit le blob du worker : URLs + langue de la page + code partagé
+// (réutilisé tel quel) + bootstrap.
 function creerBlobTravailleur() {
   const partage = document.getElementById('code-partage').textContent;
-  const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' + partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
+  const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' +
+    'const LANGUE_PAGE = ' + JSON.stringify(navigator.language || '') + ';\n' +
+    partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
   return URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
 }
 
@@ -677,7 +1080,7 @@ function initTravailleur() {
       const req = requetesEnCours.get(d.id);
       if (!req) return;
       requetesEnCours.delete(d.id);
-      if (d.ok) req.resolve(d.md);
+      if (d.ok) req.resolve({ md: d.md, images: d.images || [] });
       else      req.reject(new Error(d.erreur)); // vraie erreur de conversion → journal
     };
 
@@ -694,7 +1097,7 @@ function initTravailleur() {
 // Convertit via le worker. Renvoie null si le worker ne prend pas en charge cette
 // extension (→ le fil principal prend le relais). Rejette avec err.__infra si le
 // worker meurt en cours (→ repli aussi), ou avec une vraie erreur de conversion.
-async function convertirViaTravailleur(fichier, ext, nom) {
+async function convertirViaTravailleur(fichier, ext, nom, ctx) {
   const exts = await initTravailleur();
   if (!exts || travailleurMort || !travailleur || !exts.includes(ext)) {
     statsTravailleur.replis++;
@@ -704,11 +1107,11 @@ async function convertirViaTravailleur(fichier, ext, nom) {
   return new Promise((resolve, reject) => {
     const id = prochainIdReq++;
     requetesEnCours.set(id, {
-      resolve: md => { statsTravailleur.converties++; resolve(md); },
+      resolve: r => { statsTravailleur.converties++; resolve(r); },
       reject,
     });
     try {
-      travailleur.postMessage({ id, ext, nom, ab }, [ab]); // transfert, pas de copie
+      travailleur.postMessage({ id, ext, nom, ab, ctx }, [ab]); // transfert, pas de copie
     } catch (e) {
       requetesEnCours.delete(id);
       const err = new Error('Envoi au worker impossible'); err.__infra = true;
@@ -718,12 +1121,13 @@ async function convertirViaTravailleur(fichier, ext, nom) {
 }
 
 // Point d'entrée unique de conversion : worker pour les formats lourds (avec repli
-// transparent), fil principal pour le reste.
-async function convertir(fichier, ext, nom) {
+// transparent), fil principal pour le reste. Renvoie toujours { md, images }.
+// ctx.dossierImages : dossier (relatif au .md) où ranger les images extraites.
+async function convertir(fichier, ext, nom, ctx) {
   if (EXTENSIONS_TRAVAILLEUR.has(ext) && !travailleurMort) {
     try {
-      const md = await convertirViaTravailleur(fichier, ext, nom);
-      if (md !== null) return md;
+      const r = await convertirViaTravailleur(fichier, ext, nom, ctx);
+      if (r !== null) return r;
     } catch (err) {
       if (!(err && err.__infra)) throw err; // vraie erreur → remonte au journal
       statsTravailleur.replis++;            // panne worker → repli fil principal
@@ -731,7 +1135,7 @@ async function convertir(fichier, ext, nom) {
     }
   }
   const ab = await lireCommeArrayBuffer(fichier);
-  return CONVERTISSEURS[ext](ab, nom);
+  return normaliserResultat(await CONVERTISSEURS[ext](ab, nom, ctx));
 }
 
 // =====================================================================
@@ -756,7 +1160,6 @@ async function traiterFichiers(fileList) {
 async function traiterUnFichier(fichier) {
   const nom    = fichier.name;
   const ext    = extOf(nom);
-  const nomMd  = baseName(nom) + '.md';
   const id     = 'item-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 
   // 1. Format refusé ?
@@ -778,22 +1181,28 @@ async function traiterUnFichier(fichier) {
     ajouterLigne({ id, icone: '⏳', nom, statut: 'en-cours', msg: 'Conversion en cours…', cliquable: false });
   }
 
-  // 4. Conversion (worker pour les formats lourds, fil principal sinon)
+  // 4. Conversion (worker pour les formats lourds, fil principal sinon).
+  // Nom de sortie réservé avant le premier await : l'ordre de dépôt décide des
+  // suffixes _2, _3… même si les conversions parallèles finissent dans le désordre.
+  const sortie = reserverSortie(nom);
   try {
-    const md = await convertir(fichier, ext, nom);
+    const { md, images } = await convertir(fichier, ext, nom, { dossierImages: sortie.dossierImages });
 
     // Détecter alerte scan PDF
-    const estScan = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
-    resultats.push({ nom, nomMd, md });
+    const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
+    const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    resultats.push(resultat);
 
+    const avecImages = images.length ? ` (+ ${images.length} image${images.length > 1 ? 's' : ''})` : '';
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${nomMd}`,
-      md,
+      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${sortie.nomMd}${avecImages}`,
+      resultat,
       cliquable: true,
     });
   } catch (err) {
+    libererSortie(sortie);
     mettreAJourLigne(id, { icone: '❌', statut: 'err', msg: `Erreur : ${err.message}`, cliquable: false });
   }
 }
@@ -837,13 +1246,15 @@ function initUI() {
     if (input.files.length) { traiterFichiers(input.files); input.value = ''; }
   });
 
-  // Bouton ZIP
-  btnZip.addEventListener('click', genererZip);
+  // Bouton ZIP (fonction fléchée : ne pas transmettre l'événement de clic comme liste)
+  btnZip.addEventListener('click', () => genererZip());
 
   // Bouton Vider
   btnVider.addEventListener('click', () => {
     journalListe.innerHTML = '';
     resultats = [];
+    nomsSortie.clear();
+    dossiersImages.clear();
     journalSection.hidden = true;
     btnZip.hidden = true;
   });
@@ -863,24 +1274,12 @@ function initUI() {
     }
   });
 
-  document.getElementById('btn-copier').addEventListener('click', () => {
-    const texte = apercuContenu.textContent;
-    const btn   = document.getElementById('btn-copier');
-    const ok = () => { btn.textContent = '✅ Copié !'; setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000); };
-    // Clipboard API (HTTPS) ; fallback execCommand pour contextes locaux (file://)
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(texte).then(ok).catch(() => {
-        try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Erreur copie'; }
-      });
-    } else {
-      // Fallback : sélectionner le texte dans le <pre>
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(apercuContenu);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      try { document.execCommand('copy'); ok(); } catch { btn.textContent = '⚠️ Copie manuelle'; }
-    }
+  document.getElementById('btn-copier').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-copier');
+    // Toujours le Markdown complet, même si l'aperçu affiché est tronqué
+    const reussi = await copierTexte(apercuMdComplet);
+    btn.textContent = reussi ? '✅ Copié !' : '⚠️ Copie impossible';
+    setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000);
   });
 
   verifierBibliotheques();
@@ -930,7 +1329,7 @@ function ajouterLigne({ id, icone, nom, statut, msg, cliquable }) {
   journalListe.appendChild(li);
 }
 
-function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
+function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
   const li = document.getElementById(id);
   if (!li) return;
 
@@ -939,24 +1338,27 @@ function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
   li.querySelector('.journal-msg').textContent   = msg;
 
   const nomSpan = li.querySelector('.journal-nom');
-  if (cliquable && md) {
+  if (cliquable && resultat) {
     nomSpan.classList.remove('non-cliquable');
-    const nomFichier = nomSpan.title;
-    const nomMd      = baseName(nomFichier) + '.md';
+    const { nomMd, md, images } = resultat;
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
     actions.className = 'journal-actions-item';
 
+    // Avec des images, le .md seul aurait des liens cassés : on livre une archive
     const btnDl = document.createElement('button');
     btnDl.className = 'btn btn-secondaire btn-petit';
-    btnDl.textContent = '⬇️ Télécharger';
-    btnDl.addEventListener('click', () => telechargerBlob(md, nomMd));
+    btnDl.textContent = images.length ? '⬇️ Télécharger (.zip)' : '⬇️ Télécharger';
+    if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
+    btnDl.addEventListener('click', () => images.length
+      ? genererZip([resultat], baseName(nomMd) + '.zip')
+      : telechargerBlob(md, nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
     btnPrev.textContent = '👁️ Aperçu';
-    btnPrev.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+    btnPrev.addEventListener('click', () => ouvrirApercu(nomMd, md));
 
     actions.appendChild(btnDl);
     actions.appendChild(btnPrev);
@@ -964,7 +1366,7 @@ function mettreAJourLigne(id, { icone, statut, msg, md, cliquable }) {
     li.querySelector('.journal-corps').appendChild(actions);
 
     // Clic sur le nom → aperçu
-    nomSpan.addEventListener('click', () => ouvrirApercu(nomFichier, md));
+    nomSpan.addEventListener('click', () => ouvrirApercu(nomMd, md));
   } else {
     nomSpan.classList.add('non-cliquable');
   }
@@ -976,11 +1378,46 @@ function mettreAJourBoutonZip() {
 }
 
 // ---- Aperçu ----
+// Au-delà, afficher le texte fige la page (≈ 1,5 s pour 3 Mo) : on n'en montre
+// que le début. Copier et Télécharger portent toujours sur le fichier complet.
+const APERCU_MAX_CARACTERES = 100000;
+let apercuMdComplet = '';
+
 function ouvrirApercu(nom, md) {
-  apercuTitre.textContent   = baseName(nom) + '.md';
-  apercuContenu.textContent = md;
+  apercuMdComplet = md;
+  apercuTitre.textContent = baseName(nom) + '.md';
+  const note = document.getElementById('apercu-note');
+  if (md.length > APERCU_MAX_CARACTERES) {
+    // Couper en fin de ligne pour ne pas tronquer une ligne de tableau au milieu
+    const coupe = md.lastIndexOf('\n', APERCU_MAX_CARACTERES);
+    apercuContenu.textContent = md.slice(0, coupe > 0 ? coupe : APERCU_MAX_CARACTERES);
+    const fr = n => n.toLocaleString('fr-FR');
+    note.textContent = `Aperçu limité au début du fichier (${fr(APERCU_MAX_CARACTERES)} premiers caractères sur ` +
+      `${fr(md.length)}). « Copier » et « Télécharger » portent sur le fichier complet.`;
+    note.hidden = false;
+  } else {
+    apercuContenu.textContent = md;
+    note.hidden = true;
+  }
   apercuOverlay.hidden = false;
   apercuContenu.focus();
+}
+
+// Copie dans le presse-papiers. Repli pour les contextes où l'API est refusée
+// (file://, navigateur ancien) : zone de texte temporaire hors écran.
+async function copierTexte(texte) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(texte); return true; } catch { /* repli ci-dessous */ }
+  }
+  const zone = Object.assign(document.createElement('textarea'), { value: texte, readOnly: true });
+  zone.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.appendChild(zone);
+  zone.select();
+  let reussi = false;
+  try { reussi = document.execCommand('copy'); } catch { reussi = false; }
+  zone.remove();
+  apercuContenu.focus();
+  return reussi;
 }
 
 function fermerApercu() {
@@ -988,25 +1425,16 @@ function fermerApercu() {
 }
 
 // ---- ZIP ----
-async function genererZip() {
-  if (!resultats.length) return;
-  const zip    = new JSZip();
-  const noms   = new Set();
-
-  for (const { nom, md } of resultats) {
-    let candidat = baseName(nom) + '.md';
-    let n = 2;
-    while (noms.has(candidat)) { candidat = `${baseName(nom)}_${n++}.md`; }
-    noms.add(candidat);
-    zip.file(candidat, md);
+// Archive des .md (noms déjà uniques, voir reserverSortie) et de leurs images,
+// rangées dans images/<document>/ comme les liens du Markdown l'indiquent.
+async function genererZip(liste = resultats, nomArchive = 'conversions_markdown.zip') {
+  if (!liste.length) return;
+  const zip = new JSZip();
+  for (const { nomMd, md, images } of liste) {
+    zip.file(nomMd, md);
+    for (const img of images || []) zip.file(img.chemin, img.data);
   }
-
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), { href: url, download: 'conversions_markdown.zip' });
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000); // 30s
+  telechargerBlob(await zip.generateAsync({ type: 'blob' }), nomArchive);
 }
 
 // ---- Vérification bibliothèques ----
