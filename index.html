@@ -51,6 +51,37 @@
       --text:     #1e293b;
       --muted:    #64748b;
       --radius:   10px;
+      --lien:       #2563eb;
+      --fond-2:     #f1f5f9;
+      --accent-fond:#eff6ff;
+      --ok-fond:    #f0fdf4;
+      --ok-bord:    #bbf7d0;
+      --note-fond:  #fefce8;
+      --note-bord:  #fde047;
+      --note-texte: #854d0e;
+      color-scheme: light dark;   /* cases à cocher, barres de défilement */
+    }
+    /* Thème sombre : suit le réglage du système */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --accent-h:   #3b82f6;
+        --lien:       #93c5fd;
+        --ok:         #4ade80;
+        --warn:       #fbbf24;
+        --err:        #f87171;
+        --bg:         #0f172a;
+        --surface:    #1e293b;
+        --border:     #334155;
+        --text:       #e2e8f0;
+        --muted:      #94a3b8;
+        --fond-2:     #273449;
+        --accent-fond:#172554;
+        --ok-fond:    #052e16;
+        --ok-bord:    #166534;
+        --note-fond:  #422006;
+        --note-bord:  #a16207;
+        --note-texte: #fde68a;
+      }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     /* L'attribut hidden doit TOUJOURS l'emporter sur les display: des classes
@@ -70,16 +101,16 @@
     header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: .4rem; }
     .confidentialite {
       display: inline-flex; align-items: center; gap: .4rem;
-      background: #f0fdf4; color: var(--ok);
-      border: 1px solid #bbf7d0; border-radius: 20px;
+      background: var(--ok-fond); color: var(--ok);
+      border: 1px solid var(--ok-bord); border-radius: 20px;
       font-size: .82rem; padding: .3rem .9rem;
     }
 
     /* ---- Bandeau avertissement CDN ---- */
     .bandeau-cdn {
-      background: #fefce8; border: 1px solid #fde047;
+      background: var(--note-fond); border: 1px solid var(--note-bord);
       border-radius: var(--radius); padding: .75rem 1rem;
-      font-size: .85rem; color: #854d0e; margin-bottom: 1rem;
+      font-size: .85rem; color: var(--note-texte); margin-bottom: 1rem;
     }
 
     /* ---- Zone de dépôt ---- */
@@ -95,7 +126,7 @@
     }
     .zone-depot:hover, .zone-depot.survol {
       border-color: var(--accent);
-      background: #eff6ff;
+      background: var(--accent-fond);
     }
     .zone-depot input[type="file"] {
       position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
@@ -103,14 +134,14 @@
     .zone-depot-icone { font-size: 2.5rem; line-height: 1; margin-bottom: .5rem; }
     .zone-depot-titre { font-size: 1.1rem; font-weight: 600; margin-bottom: .25rem; }
     .zone-depot-sub   { font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
-    .zone-depot-sub span { color: var(--accent); text-decoration: underline; }
+    .zone-depot-sub span { color: var(--lien); text-decoration: underline; }
     .option {
       display: flex; align-items: center; justify-content: center; gap: .4rem;
       margin-top: .75rem; font-size: .85rem; color: var(--muted); cursor: pointer;
     }
     .formats-badge {
       display: inline-block;
-      background: #f1f5f9; border-radius: 20px;
+      background: var(--fond-2); border-radius: 20px;
       font-size: .75rem; color: var(--muted);
       padding: .25rem .9rem; letter-spacing: .02em;
     }
@@ -127,7 +158,7 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: .75rem 1rem;
       border-bottom: 1px solid var(--border);
-      background: #f8fafc;
+      background: var(--bg);
     }
     .journal-header h2 { font-size: .95rem; font-weight: 600; }
     .journal-actions { display: flex; gap: .5rem; }
@@ -140,11 +171,11 @@
       transition: background .15s;
     }
     .journal-item:last-child { border-bottom: none; }
-    .journal-item:hover { background: #f8fafc; }
+    .journal-item:hover { background: var(--bg); }
     .journal-icone { font-size: 1rem; flex-shrink: 0; margin-top: .05rem; }
     .journal-corps { flex: 1; min-width: 0; }
     .journal-nom {
-      font-weight: 600; color: var(--accent);
+      font-weight: 600; color: var(--lien);
       cursor: pointer; text-decoration: none;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       display: block;
@@ -169,8 +200,8 @@
     .btn:disabled { opacity: .4; cursor: default; }
     .btn-primaire  { background: var(--accent); color: #fff; }
     .btn-primaire:hover:not(:disabled) { background: var(--accent-h); }
-    .btn-secondaire { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
-    .btn-secondaire:hover:not(:disabled) { background: #e2e8f0; }
+    .btn-secondaire { background: var(--fond-2); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondaire:hover:not(:disabled) { background: var(--border); }
     .btn-petit { font-size: .78rem; padding: .25rem .6rem; }
 
     /* ---- Aperçu overlay ---- */
@@ -198,8 +229,8 @@
     .apercu-titre { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .apercu-header-actions { display: flex; gap: .4rem; flex-shrink: 0; }
     .apercu-note {
-      background: #fefce8; color: #854d0e;
-      border-bottom: 1px solid #fde047;
+      background: var(--note-fond); color: var(--note-texte);
+      border-bottom: 1px solid var(--note-bord);
       font-size: .8rem; padding: .5rem 1rem;
     }
     .apercu-contenu {
