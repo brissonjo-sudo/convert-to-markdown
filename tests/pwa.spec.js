@@ -32,6 +32,17 @@ test('hors-ligne après la première visite', async ({ page, context }) => {
   expect(r.resultats[0].md).toContain('| 1 | 2 |');
 });
 
+test('une page d\'erreur visitée ne remplace pas l\'application hors-ligne', async ({ page, context }) => {
+  await ouvrirApp(page);
+  await page.waitForFunction(() => navigator.serviceWorker.controller);
+  const reponse = await page.goto('inexistant.html');   // 404, servie par le SW (réseau d'abord)
+  expect(reponse.status()).toBe(404);
+
+  await context.setOffline(true);
+  await page.goto('index.html');
+  await expect(page.locator('#zone-depot')).toBeVisible();
+});
+
 test('OCR disponible hors-ligne après un premier usage', async ({ page, context }) => {
   test.setTimeout(240_000);
   await ouvrirApp(page);

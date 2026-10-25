@@ -63,8 +63,11 @@ self.addEventListener('fetch', event => {
     event.respondWith((async () => {
       try {
         const reseau = await fetch(req);
-        const cache = await caches.open(VERSION);
-        cache.put('./index.html', reseau.clone());
+        // Seule la vraie page est conservée : une 404 ou une autre page visitée
+        // remplacerait sinon l'application hors-ligne.
+        if (reseau.ok && /\/(index\.html)?$/.test(new URL(req.url).pathname)) {
+          (await caches.open(VERSION)).put('./index.html', reseau.clone());
+        }
         return reseau;
       } catch {
         return (await caches.match('./index.html')) || Response.error();
