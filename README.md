@@ -20,7 +20,11 @@ Un convertisseur universel de fichiers bureautiques en Markdown (.md) — **100 
 
 **Vos fichiers ne quittent jamais votre appareil.**
 
-Toute la conversion s'effectue dans votre navigateur, en JavaScript côté client. Aucun fichier n'est envoyé sur un serveur, aucune donnée n'est collectée, aucun cookie n'est posé.
+Toute la conversion s'effectue dans votre navigateur, en JavaScript côté client, y compris la reconnaissance de texte (OCR). Aucun fichier n'est envoyé sur un serveur, aucune donnée n'est collectée, aucun cookie n'est posé.
+
+Cette promesse n'est pas seulement tenue par le code : **le navigateur l'impose**.
+- Une **politique de sécurité (CSP)** interdit à la page toute connexion vers un autre serveur que les deux CDN (en lecture seule) qui fournissent les bibliothèques. Même une bibliothèque compromise ne pourrait pas envoyer vos documents ailleurs.
+- Chaque bibliothèque est **vérifiée par son empreinte (SRI)** : un fichier modifié sur le CDN est refusé et ne s'exécute pas. La CI compare ces empreintes aux fichiers réellement servis.
 
 ✅ Adapté pour : arrêtés municipaux, rapports internes, documents administratifs, données RH, courriers confidentiels.
 
@@ -30,11 +34,14 @@ Toute la conversion s'effectue dans votre navigateur, en JavaScript côté clien
 
 | Catégorie | Extensions | Ce qui est restitué | Moteur |
 | --- | --- | --- | --- |
-| Word | `.docx` | Titres, listes, tableaux, images (extraites en fichiers) | mammoth.js + Turndown |
+| Word | `.docx` | Titres, listes, tableaux (cellules fusionnées comprises), images (extraites en fichiers), notes de bas de page | mammoth.js + Turndown |
+| LibreOffice Writer | `.odt` | Titres, mise en forme, listes, tableaux, images, notes de bas de page | JSZip |
 | PDF (texte) | `.pdf` | Titres, paragraphes, listes ; en-têtes et pieds de page répétés retirés | PDF.js |
+| PDF scanné | `.pdf` | Texte reconnu par **OCR** (français), à la demande, sur votre appareil | PDF.js + Tesseract.js |
 | Excel | `.xlsx`, `.xls`, `.ods` | Une section par feuille, valeurs telles qu'affichées (dates, montants, %) | SheetJS |
 | Données tabulaires | `.csv`, `.tsv` | Tableau ; séparateur et encodage détectés | PapaParse |
 | PowerPoint | `.pptx` | Titres, puces, tableaux, images, notes de l'orateur, dans l'ordre réel | JSZip |
+| LibreOffice Impress | `.odp` | Titres, puces, tableaux, images, notes de l'orateur | JSZip |
 | Texte | `.txt` | Texte brut | Natif |
 | Page web | `.html`, `.htm` | Structure, tableaux, images intégrées (extraites en fichiers) | Turndown |
 
@@ -45,10 +52,11 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 ## ⚠️ Limites connues
 
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
-- **PDF scannés (image)** : aucun texte ne peut être extrait sans **OCR**. Un avertissement est ajouté au fichier produit. Pour traiter ces PDF, utilisez d'abord un outil OCR (Adobe Acrobat, ilovepdf.com, Tesseract…).
+- **OCR des PDF scannés** : proposé par un bouton dans le journal. Le premier usage télécharge environ **5 Mo** (moteur et données françaises), ensuite conservés pour un usage hors-ligne. La qualité dépend de celle du scan : le texte reconnu est signalé comme « à relire », avec la confiance moyenne. Français uniquement. Seuls les PDF entièrement scannés sont détectés (pas une page scannée au milieu d'un PDF texte).
+- **Données de langue de l'OCR** : ce sont des données, pas du code, et elles ne sont pas vérifiées par empreinte ; la CSP garantit qu'elles ne peuvent venir que du CDN jsDelivr.
 - **Structure des PDF** : un PDF ne contient que du texte positionné ; titres et paragraphes sont déduits de la mise en page (taille de police, interlignes). Les mises en page complexes (plusieurs colonnes, tableaux) sont restituées imparfaitement. Un mot coupé en fin de ligne garde son trait d'union (« collec-tivités ») : sans dictionnaire, impossible de le distinguer d'un mot composé (« porte-monnaie »).
 - **Images `.emf` / `.wmf`** (fréquentes dans les documents Office anciens) : extraites telles quelles, mais la plupart des lecteurs Markdown ne les affichent pas.
-- **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com`. Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
+- **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com` (et `cdn.jsdelivr.net` pour l'OCR). Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
 
 ---
 
@@ -63,7 +71,8 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 - ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement (limité au début des très gros fichiers, pour rester instantané)
 - ✅ **Copier dans le presse-papiers** d'un clic — toujours le fichier complet
 - ✅ **Détection automatique d'encodage** (UTF-8, UTF-16, Windows-1252) pour les CSV/TXT
-- ✅ **Détection des PDF scannés** avec message d'orientation
+- ✅ **OCR des PDF scannés** — reconnaissance du texte sur votre appareil, à la demande, disponible hors-ligne après un premier usage
+- ✅ **Formats LibreOffice** (`.odt`, `.ods`, `.odp`) au même titre que Microsoft Office
 - ✅ **Accessibilité** : navigation clavier complète, focus trap sur les modales, attributs ARIA
 
 ---
@@ -97,21 +106,23 @@ Vous pouvez aussi l'utiliser **complètement hors-ligne** : téléchargez juste 
   - `icone.svg` — icône de l'application
 - **Zéro framework** : JavaScript vanilla, pas de webpack, pas de build
 - **Conversions lourdes déléguées** : les tableurs / CSV / PowerPoint sont parsés dans un **Web Worker** (construit à partir du bloc `#code-partage` d'`index.html`, sans duplication de code), avec repli automatique sur le fil principal si le worker ne peut pas démarrer
-- **Bibliothèques tierces** : chargées depuis [cdnjs.cloudflare.com](https://cdnjs.com), versions épinglées
+- **Bibliothèques tierces** : chargées depuis [cdnjs.cloudflare.com](https://cdnjs.com) (et [jsDelivr](https://www.jsdelivr.com) pour l'OCR), versions épinglées, empreintes SRI vérifiées
 - **Compatibilité** : Chrome, Edge, Firefox récents (testé sur les 3)
 
 ### Sécurité
 
 - ✅ Conversion 100 % côté client (zéro requête réseau pour les fichiers)
+- ✅ CSP : aucune connexion possible vers un serveur tiers (vérifié par des tests qui tentent des fuites)
+- ✅ SRI : toute bibliothèque, y compris celles chargées par les workers et l'OCR, est vérifiée par son empreinte
 - ✅ Construction DOM sécurisée (pas d'`innerHTML` avec données externes → pas de XSS)
 - ✅ HTML malveillant neutralisé (DOMParser inerte, `<script>`/`<style>` retirés)
 - ✅ Validation par tests automatisés en navigateur (Playwright), à chaque modification
 
 ### Tests
 
-Une suite de tests Playwright (`tests/`) vérifie chaque format de bout en bout dans Chromium : fichiers générés à la volée (PDF, Word, PowerPoint, Excel), contenu exact du Markdown produit, archives ZIP téléchargées, Web Worker et repli, fonctionnement hors-ligne. Elle tourne **sans réseau** : un petit serveur de test (`tests/serveur.js`) sert l'application en remplaçant le CDN par les mêmes versions des bibliothèques, installées via npm.
+Une suite de tests Playwright (`tests/`) vérifie chaque format de bout en bout dans Chromium : fichiers générés à la volée (PDF, PDF scanné, Word, PowerPoint, Excel, LibreOffice), fichiers réels produits par LibreOffice et pandoc (`tests/fichiers/`, régénérables par `generer.sh`), contenu exact du Markdown produit, archives ZIP téléchargées, Web Worker et repli, OCR, fonctionnement hors-ligne, confidentialité (CSP et SRI). Tout test échoue s'il provoque une violation de la CSP ou un échec de vérification d'empreinte. Elle tourne **sans réseau** : un petit serveur de test (`tests/serveur.js`) sert l'application en remplaçant le CDN par les mêmes versions des bibliothèques, installées via npm.
 
-Les tests se lancent automatiquement sur GitHub à chaque pull request et à chaque modification de `main`. Pour les lancer localement :
+Les tests se lancent automatiquement sur GitHub à chaque pull request et à chaque modification de `main`, avec une vérification des empreintes SRI contre les fichiers réellement servis par les CDN (`tests/verifier-cdn.js`). Pour les lancer localement :
 
 ```bash
 npm install                          # outillage de test uniquement
@@ -130,13 +141,16 @@ Pour modifier l'outil :
 
 L'application ne demande ni compilation ni dépendance : `package.json` ne sert qu'aux tests (voir ci-dessus), qui vérifient automatiquement chaque pull request.
 
-> **Note (service worker)** : modifier `index.html` seul ne demande rien de particulier — les pages sont servies « réseau d'abord », la nouvelle version s'affiche au rechargement suivant. En revanche, si vous **changez la version d'une bibliothèque CDN**, mettez à jour son URL dans `index.html` **et** dans `sw.js` (`PRECACHE`), puis incrémentez la constante `VERSION` de `sw.js` pour purger l'ancien cache.
+> **Note (bibliothèques et service worker)** : modifier `index.html` seul ne demande rien de particulier — les pages sont servies « réseau d'abord », la nouvelle version s'affiche au rechargement suivant. En revanche, si vous **changez la version d'une bibliothèque CDN** :
+> 1. mettez à jour son URL **et son empreinte** dans `index.html` (attribut `integrity` de la balise, ou table `INTEGRITE`) ; `node tests/verifier-cdn.js` donne l'empreinte réelle ;
+> 2. mettez à jour l'URL dans `sw.js` (`PRECACHE`) et incrémentez sa constante `VERSION` pour purger l'ancien cache ;
+> 3. pour les tests, épinglez la même version dans `package.json`.
 
 ---
 
 ## 📅 Roadmap (idées, non engageant)
 
-- 🔭 OCR pour les PDF scannés (Tesseract.js — décision en attente, ~20 Mo à charger)
+- 🔭 OCR des pages scannées au milieu d'un PDF texte, et d'autres langues que le français
 - 🔭 Support `.epub` (e-books)
 - 🔭 Interface mobile optimisée (actuellement responsive mais perfectible)
 

@@ -2,6 +2,18 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <!-- Confidentialité imposée par le navigateur, et non seulement promise :
+       - connect-src : la page ne peut se connecter qu'à elle-même et aux deux CDN
+         (en lecture seule) qui servent les bibliothèques ; aucun envoi de vos
+         fichiers vers un autre serveur n'est possible, même par une bibliothèque
+         compromise ;
+       - img-src, form-action, base-uri, object-src : autres voies de fuite fermées ;
+       - script-src : 'unsafe-inline' pour le code de cette page, 'wasm-unsafe-eval'
+         pour le moteur OCR (WebAssembly), blob: pour les scripts vérifiés (SRI)
+         exécutés dans les workers.
+       Chaque bibliothèque est en outre vérifiée par son empreinte (SRI, voir
+       INTEGRITE) : un fichier modifié sur le CDN est refusé. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📄 ➜ 📝 Convertisseur Markdown</title>
 
@@ -11,35 +23,19 @@
   <link rel="apple-touch-icon" href="icone.svg">
   <meta name="theme-color" content="#2563eb">
 
-  <!-- CDN cdnjs.cloudflare.com — versions épinglées
-       SÉCURITÉ : Pour activer la vérification d'intégrité SRI, obtenez les hashes sur
-       https://www.srihash.org/ ou https://cdnjs.com (page de chaque lib) et ajoutez :
-         integrity="sha384-<HASH>" crossorigin="anonymous"
-       Exemple :
-         <script src="..." integrity="sha384-xxxx" crossorigin="anonymous"></script>
-  -->
+  <!-- Bibliothèques : cdnjs.cloudflare.com, versions épinglées, empreinte SRI
+       vérifiée par le navigateur (un attribut integrity par ligne : la CI compare
+       chaque empreinte au fichier réellement servi par le CDN, voir
+       tests/verifier-cdn.js).
+       defer : chargement en parallèle sans bloquer le premier affichage ;
+       verifierBibliotheques() tourne sur DOMContentLoaded, déclenché après. -->
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-  <!-- defer : les bibliothèques (~1 Mo) se chargent en parallèle sans bloquer le
-       premier affichage ; verifierBibliotheques() tourne sur DOMContentLoaded,
-       qui n'est déclenché qu'après leur exécution. -->
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: mammoth introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: turndown introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: pdf.js introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: SheetJS introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: PapaParse introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: JSZip introuvable')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" integrity="sha384-nFoSjZIoH3CCp8W639jJyQkuPHinJ2NHe7on1xvlUA7SuGfJAfvMldrsoAVm6ECz" crossorigin="anonymous" onerror="console.warn('CDN : mammoth introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js" integrity="sha384-M38SGnzOPJfBv3TL3aroMNCjJDMefYLFDSGg3ECG2xbY6DDEAnmnmHJ8FaWaSHG+" crossorigin="anonymous" onerror="console.warn('CDN : Turndown introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" onerror="console.warn('CDN : PDF.js introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous" onerror="console.warn('CDN : PapaParse introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous" onerror="console.warn('CDN : JSZip introuvable ou altéré')"></script>
 
   <style>
     :root {
@@ -284,6 +280,17 @@
      JSZip / TextDecoder existent dans les deux contextes. -->
 <script id="code-partage">
 'use strict';
+
+// Télécharge un script en vérifiant son empreinte (SRI, table INTEGRITE) et
+// renvoie une URL blob: à exécuter (importScripts, Worker). Un fichier modifié sur
+// le CDN, ou sans empreinte connue, est refusé : rien ne s'exécute sans vérification.
+async function scriptVerifie(url) {
+  const integrity = INTEGRITE[url];
+  if (!integrity) throw new Error('aucune empreinte connue pour ' + url);
+  const rep = await fetch(url, { integrity, mode: 'cors', credentials: 'omit' });
+  if (!rep.ok) throw new Error(`${url} : erreur HTTP ${rep.status}`);
+  return URL.createObjectURL(new Blob([await rep.blob()], { type: 'text/javascript' }));
+}
 
 const extOf    = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 const baseName = nom => nom.replace(/\.[^.]+$/, '');
@@ -934,6 +941,21 @@ async function convOdp(ab, nom, ctx) {
 // SECTION 1 : CONFIG
 // =====================================================================
 const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// Empreintes (SRI) des scripts chargés hors balise <script> : worker PDF.js,
+// bibliothèques du worker de conversion, moteur OCR. Rien ne s'exécute sans
+// correspondre à son empreinte (voir scriptVerifie). Une ligne par fichier :
+// format lu par tests/verifier-cdn.js (CI) et tests/serveur.js.
+const INTEGRITE = {
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js': 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js': 'sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw',
+  'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js': 'sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs',
+  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js': 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js': 'sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js': 'sha384-iUyp1FxLBc4DYaSwxT1/G6elMdSh3vvQffNSmMiySoXDpk2XfS9ZcM4RjPSiqiw3',
+  'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js': 'sha384-1PHRxr8cs/w6IDh6HZYHEHS+Li9cfjahWYKnioD1xvjs7wZD20qpwhD2+ZvhDmHU',
+  'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-lstm.wasm.js': 'sha384-ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA',
+};
 const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
 const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
 const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultanément
@@ -1299,9 +1321,24 @@ function blocsPages(pages) {
   return blocs;
 }
 
+// Worker de PDF.js : téléchargé avec vérification d'empreinte puis lancé depuis une
+// URL blob: (PDF.js l'aurait sinon chargé lui-même, sans vérification)
+let workerPdfPret = null;
+function preparerPdf() {
+  if (!workerPdfPret) {
+    workerPdfPret = scriptVerifie(PDFJS_WORKER_URL)
+      .then(url => { pdfjsLib.GlobalWorkerOptions.workerSrc = url; })
+      .catch(err => { workerPdfPret = null; throw new Error(`composant PDF.js inaccessible ou altéré (${err.message})`); });
+  }
+  return workerPdfPret;
+}
+
+// isEvalSupported : false — PDF.js sait se passer d'eval, interdit par la CSP
+const ouvrirPdf = async ab => { await preparerPdf(); return pdfjsLib.getDocument({ data: new Uint8Array(ab), isEvalSupported: false }); };
+
 // .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
-  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
+  const loadingTask = await ouvrirPdf(ab);
   const pdf  = await loadingTask.promise;
 
   try {
@@ -1338,9 +1375,18 @@ async function convPdf(ab, nom) {
 const OCR = {
   script:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js',
   worker:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js',
-  core:    'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0',
-  langues: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/fra@1.0.0/4.0.0_best_int',
+  coreSimd: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js',
+  core:     'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-lstm.wasm.js',
+  // Données de langue : ce ne sont pas du code (pas d'empreinte), CSP oblige
+  // elles ne peuvent venir que de ce CDN
+  langues:  'https://cdn.jsdelivr.net/npm/@tesseract.js-data/fra@1.0.0/4.0.0_best_int',
 };
+// Moteur SIMD (plus rapide) si disponible : même test que wasm-feature-detect,
+// utilisé par Tesseract pour ce choix quand il charge lui-même son moteur
+const SIMD_WASM = (() => {
+  try { return WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11])); }
+  catch { return false; }
+})();
 const OCR_LARGEUR_MAX = 3000;   // pixels : ~300 ppp pour un A4, mémoire maîtrisée
 
 let tesseractPromise = null;
@@ -1348,12 +1394,12 @@ function chargerTesseract() {
   if (window.Tesseract) return Promise.resolve();
   if (!tesseractPromise) {
     tesseractPromise = new Promise((resolve, reject) => {
-      const s = Object.assign(document.createElement('script'), { src: OCR.script, crossOrigin: 'anonymous' });
+      const s = Object.assign(document.createElement('script'), { src: OCR.script, integrity: INTEGRITE[OCR.script], crossOrigin: 'anonymous' });
       s.onload  = () => window.Tesseract ? resolve() : reject(new Error('moteur de reconnaissance invalide'));
       s.onerror = () => {
         tesseractPromise = null;   // nouvel essai possible au prochain clic
         s.remove();
-        reject(new Error('téléchargement du moteur impossible (connexion internet requise la première fois)'));
+        reject(new Error('téléchargement du moteur impossible ou fichier altéré (connexion internet requise la première fois)'));
       };
       document.head.appendChild(s);
     });
@@ -1383,11 +1429,20 @@ function lignesOcr(data) {
 async function ocrPdf(fichier, nom, progression) {
   progression('OCR : chargement du moteur de reconnaissance…');
   await chargerTesseract();
-  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(await lireCommeArrayBuffer(fichier)) });
+  const loadingTask = await ouvrirPdf(await lireCommeArrayBuffer(fichier));
   let worker = null;
+  const blobs = [];
   try {
     const pdf = await loadingTask.promise;
-    worker = await Tesseract.createWorker('fra', 1, { workerPath: OCR.worker, corePath: OCR.core, langPath: OCR.langues });
+    blobs.push(...await Promise.all([scriptVerifie(OCR.worker), scriptVerifie(SIMD_WASM ? OCR.coreSimd : OCR.core)]));
+    worker = await Tesseract.createWorker('fra', 1, {
+      workerPath: blobs[0],
+      workerBlobURL: false,
+      // « #.wasm.js » : Tesseract n'emploie tel quel qu'un chemin finissant par
+      // « js » (sinon il le prend pour un dossier) ; le fragment est ignoré au chargement
+      corePath: blobs[1] + '#.wasm.js',
+      langPath: OCR.langues,
+    });
     const pages = [], confiances = [];
     const canvas = document.createElement('canvas');
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -1414,6 +1469,7 @@ async function ocrPdf(fichier, nom, progression) {
     return [...blocs, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     if (worker) await worker.terminate();
+    blobs.forEach(u => URL.revokeObjectURL(u));
     loadingTask.destroy();
   }
 }
@@ -1496,15 +1552,17 @@ const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
   jszip:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
 };
 
-// Corps du worker : importe les libs (chacune isolée → disponibilité partielle
+// Corps du worker : importe les libs vérifiées (chacune isolée → disponibilité partielle
 // possible), puis répond aux requêtes {id, ext, nom, ab, ctx} par
 // {id, ok, md, images} ou {id, ok: false, erreur}.
 // La poignée de main {type:'pret', exts} annonce les extensions réellement gérées.
 const BOOTSTRAP_TRAVAILLEUR = `
 const CONVERTISSEURS_W = {};
-try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; } catch (e) {}
-try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
-try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; CONVERTISSEURS_W['.odt'] = convOdt; CONVERTISSEURS_W['.odp'] = convOdp; } catch (e) {}
+const LIBS_W = [
+  [URLS.xlsx,      () => { CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; }],
+  [URLS.papaparse, () => { CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; }],
+  [URLS.jszip,     () => { CONVERTISSEURS_W['.pptx'] = convPptx; CONVERTISSEURS_W['.odt'] = convOdt; CONVERTISSEURS_W['.odp'] = convOdp; }],
+];
 self.onmessage = async (e) => {
   const { id, ext, nom, ab, ctx } = e.data;
   try {
@@ -1516,15 +1574,25 @@ self.onmessage = async (e) => {
     self.postMessage({ id, ok: false, erreur: (err && err.message) || String(err) });
   }
 };
-self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
+// Téléchargements vérifiés (SRI) en parallèle, puis exécution dans l'ordre
+(async () => {
+  const blobs = await Promise.allSettled(LIBS_W.map(([url]) => scriptVerifie(url)));
+  blobs.forEach((b, i) => {
+    if (b.status !== 'fulfilled') return;
+    try { importScripts(b.value); LIBS_W[i][1](); } catch (e) { /* bibliothèque indisponible */ }
+    URL.revokeObjectURL(b.value);
+  });
+  self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
+})();
 `;
 
-// Construit le blob du worker : URLs + langue de la page + code partagé
+// Construit le blob du worker : URLs + langue de la page + empreintes + code partagé
 // (réutilisé tel quel) + bootstrap.
 function creerBlobTravailleur() {
   const partage = document.getElementById('code-partage').textContent;
   const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' +
     'const LANGUE_PAGE = ' + JSON.stringify(navigator.language || '') + ';\n' +
+    'const INTEGRITE = ' + JSON.stringify(INTEGRITE) + ';\n' +
     partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
   return URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
 }
@@ -1979,7 +2047,6 @@ function verifierBibliotheques() {
   CONVERTISSEURS = {};
   if (window.mammoth && window.TurndownService) CONVERTISSEURS['.docx'] = convDocx;
   if (window.pdfjsLib) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     CONVERTISSEURS['.pdf'] = convPdf;
   }
   if (window.XLSX) {

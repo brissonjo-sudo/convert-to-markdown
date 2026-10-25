@@ -12,6 +12,7 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const fs   = require('fs');
 const path = require('path');
 
@@ -40,6 +41,32 @@ const TYPES = {
   '.wasm': 'application/wasm',
   '.gz': 'application/gzip',   // servi tel quel : Tesseract décompresse lui-même
 };
+
+// Fichier local correspondant à une URL de CDN (cdnjs ou jsDelivr)
+function fichierLocal(url) {
+  if (url.startsWith(CDN + '/')) {
+    const cible = LIBS[url.slice(CDN.length + 1)];
+    return cible ? path.join(RACINE, 'node_modules', cible) : null;
+  }
+  const m = url.startsWith(NPM + '/') && url.slice(NPM.length + 1).match(/^((?:@[^/]+\/)?[^@/]+)@[^/]+\/(.+)$/);
+  return m ? path.join(RACINE, 'node_modules', m[1], m[2]) : null;
+}
+
+const empreinte = f => 'sha384-' + crypto.createHash('sha384').update(fs.readFileSync(f)).digest('base64');
+
+// Chaque ligne d'index.html qui associe une URL de CDN à une empreinte SRI reçoit
+// celle de la copie locale réellement servie (cdnjs peut minifier autrement que le
+// paquet npm). La vérification d'intégrité reste donc active pendant les tests ;
+// la CI compare à part les empreintes de production au CDN (verifier-cdn.js).
+function empreintesLocales(html) {
+  return html.split('\n').map(ligne => {
+    const url = (ligne.match(/https:\/\/(?:cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm)\/[^'"\s]+/) || [])[0];
+    const f = url && fichierLocal(url);
+    const aEmpreinte = /sha384-[A-Za-z0-9+/=]+/.test(ligne);
+    return aEmpreinte && f && fs.existsSync(f) && fs.statSync(f).isFile()
+      ? ligne.replace(/sha384-[A-Za-z0-9+/=]+/, empreinte(f)) : ligne;
+  }).join('\n');
+}
 
 function envoyer(res, statut, corps, type) {
   res.writeHead(statut, {
@@ -81,7 +108,7 @@ const serveur = http.createServer((req, res) => {
     const ext = path.extname(fichier);
     let corps = fs.readFileSync(fichier);
     if (relatif === 'index.html' || relatif === 'sw.js') {
-      corps = corps.toString('utf8')
+      corps = empreintesLocales(corps.toString('utf8'))
         .split(CDN).join(`http://localhost:${PORT}/__libs__`)
         .split(NPM).join(`http://localhost:${PORT}/__npm__`);
     }
@@ -91,4 +118,9 @@ const serveur = http.createServer((req, res) => {
   envoyer(res, 404, 'introuvable');
 });
 
-serveur.listen(PORT, () => console.log(`Serveur de test : http://localhost:${PORT}/app/`));
+// Lancé directement : serveur ; importé (tests file://) : utilitaires seulement
+if (require.main === module) {
+  serveur.listen(PORT, () => console.log(`Serveur de test : http://localhost:${PORT}/app/`));
+}
+
+module.exports = { fichierLocal, empreintesLocales };

@@ -35,3 +35,19 @@ jobs:
           name: traces-playwright
           path: test-results/
           retention-days: 7
+
+  empreintes:
+    name: Empreintes des bibliothèques (CDN réel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Une bibliothèque modifiée sur le CDN, ou une empreinte erronée, bloquerait
+      # l'outil chez les utilisateurs : on compare aux fichiers réellement servis
+      - name: Comparer les empreintes SRI aux fichiers des CDN
+        run: node tests/verifier-cdn.js
