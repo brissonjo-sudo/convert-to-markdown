@@ -45,6 +45,24 @@ test.describe('navigateur en français', () => {
   });
 });
 
+test('plage déclarée sur toute la grille (mise en forme étendue) : conversion immédiate', async ({ page }) => {
+  test.setTimeout(20_000);
+  await ouvrirApp(page);
+  const md = await page.evaluate(async () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Nom'], ['', 'Alice']]), 'F');
+    // Dimension gonflée dans le XML, comme l'écrit Excel (l'écrivain de SheetJS
+    // parcourrait lui-même toute la plage si on la déclarait avant écriture)
+    const zip = await JSZip.loadAsync(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
+    const feuille = 'xl/worksheets/sheet1.xml';
+    zip.file(feuille, (await zip.file(feuille).async('text')).replace(/<dimension ref="[^"]*"/, '<dimension ref="A1:XFD1048576"'));
+    const fichier = new File([await zip.generateAsync({ type: 'blob' })], 'gonfle.xlsx');
+    await traiterFichiers([fichier]);
+    return __resume().resultats[0].md;
+  });
+  expect(md).toContain('| Nom |  |\n| --- | --- |\n|  | Alice |');
+});
+
 test.describe('navigateur en anglais', () => {
   test.use({ locale: 'en-US' });
 

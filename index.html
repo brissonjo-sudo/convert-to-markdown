@@ -420,6 +420,17 @@ function rognerGrille(lignes) {
 function lignesFeuille(ws) {
   if (!ws || !ws['!ref']) return [];
   const plage  = XLSX.utils.decode_range(ws['!ref']);
+  // Plage bornée aux cellules présentes : celle déclarée couvre parfois toute la
+  // grille (1 048 576 lignes) après une simple mise en forme, et figeait l'onglet.
+  let finL = -1, finC = -1;
+  for (const cle in ws) {
+    if (cle[0] === '!') continue;
+    const { r, c } = XLSX.utils.decode_cell(cle);
+    if (r > finL) finL = r;
+    if (c > finC) finC = c;
+  }
+  plage.e.r = Math.min(plage.e.r, finL);
+  plage.e.c = Math.min(plage.e.c, finC);
   const lignes = [];
   for (let r = plage.s.r; r <= plage.e.r; r++) {
     const ligne = [];
