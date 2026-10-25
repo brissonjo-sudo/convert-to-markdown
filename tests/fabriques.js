@@ -83,7 +83,16 @@
     const catalogue = ajouter(null);
     const arbre     = ajouter(null);
     const enfants = [];
+    let police = null;
     for (const lignes of pages) {
+      if (lignes.texte) {   // { texte: [{ t, x, y }] } : page texte, comme Fab.pdf (PDF mixte)
+        police = police || ajouter('<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>');
+        const flux = lignes.texte.map(it => `BT /F1 ${it.taille || 12} Tf ${it.x} ${it.y} Td (${it.t}) Tj ET`).join('\n');
+        const contenu = ajouter(`<</Length ${flux.length}>>\nstream\n${flux}\nendstream`);
+        enfants.push(ajouter(`<</Type/Page/Parent ${arbre} 0 R/MediaBox[0 0 595 842]/Contents ${contenu} 0 R` +
+          `/Resources<</Font<</F1 ${police} 0 R>>>>>>`));
+        continue;
+      }
       const c = canvasTexte(lignes);
       const jpeg = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92))).arrayBuffer());
       let octets = '';

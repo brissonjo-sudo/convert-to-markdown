@@ -1372,6 +1372,24 @@ function preparerPdf() {
 // isEvalSupported : false — PDF.js sait se passer d'eval, interdit par la CSP
 const ouvrirPdf = async ab => { await preparerPdf(); return pdfjsLib.getDocument({ data: new Uint8Array(ab), isEvalSupported: false }); };
 
+// Opérations PDF.js qui dessinent une image
+const OPS_IMAGE = ['paintImageXObject', 'paintInlineImageXObject', 'paintImageMaskXObject', 'paintJpegXObject',
+                   'paintImageXObjectRepeat', 'paintInlineImageXObjectGroup'];
+
+// Page PDF → { gauche, bas, haut, hauteur, lignes, scannee } dans le repère du PDF.
+// Scannée : presque pas de texte, mais une image (une page blanche n'en a pas).
+async function lirePagePdf(page) {
+  const [x0, y0, , y1] = page.view;   // boîte de la page : [x0, y0, x1, y1]
+  const p = { gauche: x0, bas: Math.min(y0, y1), haut: Math.max(y0, y1), hauteur: Math.abs(y1 - y0),
+              lignes: lignesPdf((await page.getTextContent()).items) };
+  const images = new Set(OPS_IMAGE.map(n => pdfjsLib.OPS[n]).filter(v => v !== undefined));
+  p.scannee = p.lignes.reduce((n, l) => n + l.texte.length, 0) < SEUIL_PDF_SCAN &&
+    (await page.getOperatorList()).fnArray.some(f => images.has(f));
+  return p;
+}
+
+const libellePages = numeros => (numeros.length > 1 ? 'Pages ' : 'Page ') + numeros.join(', ');
+
 // .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
   const loadingTask = await ouvrirPdf(ab);
@@ -1380,15 +1398,7 @@ async function convPdf(ab, nom) {
   try {
     // Extraire toutes les pages en parallèle (le worker PDF.js pipeline les
     // requêtes) plutôt qu'en attendant chaque page l'une après l'autre.
-    const pages = await Promise.all(
-      Array.from({ length: pdf.numPages }, (_, i) =>
-        pdf.getPage(i + 1).then(async page => {
-          const [, y0, , y1] = page.view;   // boîte de la page : [x0, y0, x1, y1]
-          return { bas: Math.min(y0, y1), haut: Math.max(y0, y1), hauteur: Math.abs(y1 - y0),
-                   lignes: lignesPdf((await page.getTextContent()).items) };
-        })
-      )
-    );
+    const pages = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1).then(lirePagePdf)));
 
     // Détecter un PDF scanné
     const totalChars = pages.reduce((n, p) => n + p.lignes.reduce((m, l) => m + l.texte.length, 0), 0);
@@ -1396,7 +1406,12 @@ async function convPdf(ab, nom) {
       return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image) : aucun texte n'a pu être extrait. Utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.\n`;
     }
 
-    return [`# ${baseName(nom)}`, ...blocsPages(pages)].join('\n\n') + '\n';
+    // Pages scannées au milieu d'un PDF texte (annexe signée, courrier numérisé)
+    const scannees = pages.flatMap((p, i) => p.scannee ? [i + 1] : []);
+    const note = scannees.length
+      ? [`> ⚠️ ${libellePages(scannees)} : image sans texte (scan probable). Utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.`]
+      : [];
+    return [`# ${baseName(nom)}`, ...note, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     // Libérer le document côté worker : sans cela, chaque PDF converti
     // reste en mémoire jusqu'à la fermeture de l'onglet.
@@ -1464,8 +1479,8 @@ function lignesOcr(data) {
 // Photos dont le texte s'obtient par OCR, comme un PDF scanné
 const EXTENSIONS_IMAGE_OCR = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
-// PDF : chaque page rendue en image (PDF.js) ; photo : une seule page. Puis
-// lecture par Tesseract.
+// PDF : chaque page scannée rendue en image (PDF.js), les pages texte gardant
+// leur texte ; photo : une seule page. Puis lecture par Tesseract.
 async function ocrDocument(fichier, nom, progression) {
   progression('OCR : chargement du moteur de reconnaissance…');
   await chargerTesseract();
@@ -1485,11 +1500,13 @@ async function ocrDocument(fichier, nom, progression) {
       corePath: blobs[1] + '#.wasm.js',
       langPath: OCR.langues,
     });
-    const pages = [], confiances = [];
+    const pages = [], confiances = [], numerosOcr = [];
     const canvas = document.createElement('canvas');
     for (let i = 1; i <= nbPages; i++) {
-      progression(`OCR : page ${i} / ${nbPages}…`);
       const page = pdf && await pdf.getPage(i);
+      const p = page && await lirePagePdf(page);
+      if (p && !p.scannee) { pages.push(p); page.cleanup(); continue; }
+      progression(`OCR : page ${i} / ${nbPages}…`);
       // Photo : createImageBitmap applique l'orientation EXIF (photo de téléphone)
       const image = page ? null : await createImageBitmap(fichier).catch(() => { throw new Error('image illisible'); });
       const largeur = page ? page.getViewport({ scale: 1 }).width : image.width;
@@ -1503,15 +1520,30 @@ async function ocrDocument(fichier, nom, progression) {
       if (page) await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
       else { ctx2d.drawImage(image, 0, 0, canvas.width, canvas.height); image.close(); }
       const { data } = await worker.recognize(canvas, {}, { blocks: true });
-      pages.push({ lignes: lignesOcr(data), haut: 0, bas: -canvas.height, hauteur: canvas.height });
+      const lignes = lignesOcr(data);
+      if (p) {
+        // Pixels → repère du PDF, celui des pages texte voisines (tailles et
+        // positions comparables pour titres, paragraphes, en-têtes répétés).
+        // shortcut: pages tournées (/Rotate) non redressées, à traiter si un cas réel se présente
+        for (const l of lignes) {
+          l.x = p.gauche + l.x / echelle; l.fin = p.gauche + l.fin / echelle;
+          l.y = p.haut + l.y / echelle;   l.taille /= echelle;
+        }
+        pages.push({ ...p, lignes });
+      } else {
+        pages.push({ lignes, haut: 0, bas: -canvas.height, hauteur: canvas.height });
+      }
+      numerosOcr.push(i);
       confiances.push(data.confidence);
       if (page) page.cleanup();
     }
     canvas.width = canvas.height = 0;   // libérer la mémoire de l'image
+    if (!confiances.length) throw new Error('aucune page scannée à reconnaître');
 
     const confiance = Math.round(confiances.reduce((s, c) => s + c, 0) / confiances.length);
+    const portee = numerosOcr.length === nbPages ? 'Texte obtenu' : `${libellePages(numerosOcr)} : texte obtenu`;
     const blocs = [`# ${baseName(nom)}`,
-      `> Texte obtenu par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.`];
+      `> ${portee} par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.`];
     return [...blocs, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     if (worker) await worker.terminate();
@@ -1817,9 +1849,11 @@ async function traiterUnFichier(fichier) {
   try {
     const { md, images } = await convertir(fichier, ext, nom, { dossierImages: sortie.dossierImages });
 
-    // Détecter alerte scan PDF
+    // Détecter alerte scan PDF : document entier, ou pages scannées (note de convPdf)
     const estImage = EXTENSIONS_IMAGE_OCR.has(ext);
-    const estScan  = estImage || (ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan'));
+    const toutScanne = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
+    const mixte    = ext === '.pdf' && md.match(/^> ⚠️ (Pages? [\d, ]+) : image sans texte/m);
+    const estScan  = estImage || toutScanne || !!mixte;
     const resultat = { nom, nomMd: sortie.nomMd, md, images, date: dateLocale() };
     if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
@@ -1829,7 +1863,9 @@ async function traiterUnFichier(fichier) {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
       msg:      estImage ? 'Image : lancez l\'OCR pour reconnaître son texte.'
-              : estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
+              : toutScanne ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.'
+              : mixte ? `Texte extrait. ${mixte[1]} ${mixte[1].startsWith('Pages') ? 'scannées : lancez l\'OCR pour les reconnaître.' : 'scannée : lancez l\'OCR pour la reconnaître.'}`
+              : `Converti → ${sortie.nomMd}${avecImages}`,
       resultat,
       proposerOcr: estScan,
       cliquable: true,
