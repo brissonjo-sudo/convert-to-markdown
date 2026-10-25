@@ -234,12 +234,12 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.txt,.html,.htm"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span></p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · HTML · TXT</span>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT</span>
   </div>
 
   <!-- Section journal -->
@@ -395,24 +395,30 @@ function texteCellule(cell) {
   return cell.v == null ? '' : String(cell.v);
 }
 
-// Lignes d'une feuille, en ignorant les lignes et colonnes vides en fin de plage
-// (souvent étendue par une simple mise en forme).
+// Retire les lignes et colonnes vides en fin de grille : la plage d'un tableur
+// (ou les cellules répétées d'un tableau OpenDocument) déborde souvent du contenu
+// réel, étendue par une simple mise en forme.
+function rognerGrille(lignes) {
+  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
+  const largeur = lignes.reduce((m, l) => {
+    let i = l.length - 1;
+    while (i >= 0 && l[i] === '') i--;
+    return Math.max(m, i + 1);
+  }, 0);
+  return lignes.map(l => l.slice(0, largeur));
+}
+
+// Lignes d'une feuille de tableur
 function lignesFeuille(ws) {
   if (!ws || !ws['!ref']) return [];
   const plage  = XLSX.utils.decode_range(ws['!ref']);
   const lignes = [];
-  let derniereCol = -1;
   for (let r = plage.s.r; r <= plage.e.r; r++) {
     const ligne = [];
-    for (let c = plage.s.c; c <= plage.e.c; c++) {
-      const v = texteCellule(ws[XLSX.utils.encode_cell({ r, c })]);
-      if (v !== '' && c - plage.s.c > derniereCol) derniereCol = c - plage.s.c;
-      ligne.push(v);
-    }
+    for (let c = plage.s.c; c <= plage.e.c; c++) ligne.push(texteCellule(ws[XLSX.utils.encode_cell({ r, c })]));
     lignes.push(ligne);
   }
-  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
-  return lignes.map(l => l.slice(0, derniereCol + 1));
+  return rognerGrille(lignes);
 }
 
 // .xlsx / .xls / .ods → Markdown (SheetJS)
@@ -608,6 +614,317 @@ async function convPptx(ab, nom, ctx) {
 
   return { md: blocs.join('\n\n') + '\n', images };
 }
+
+// ---- OpenDocument (.odt / .odp, LibreOffice) ----
+
+// Mini-analyseur XML : le worker n'a pas DOMParser. Produit un arbre
+// { nom, attrs, enfants } (les textes sont des chaînes), suffisant pour le XML
+// bien formé et sans DTD des suites bureautiques.
+function analyserXml(xml) {
+  const racine = { nom: '', attrs: {}, enfants: [] };
+  const pile = [racine];
+  const jeton = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<[?!][\s\S]*?>|<(\/?)([\w.:-]+)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
+  for (const m of xml.matchAll(jeton)) {
+    const parent = pile[pile.length - 1];
+    if (m[1] !== undefined) parent.enfants.push(m[1]);
+    else if (m[6] !== undefined) parent.enfants.push(desescaperXml(m[6]));
+    else if (m[3] !== undefined) {
+      if (m[2]) { if (pile.length > 1) pile.pop(); continue; }
+      const attrs = {};
+      for (const a of m[4].matchAll(/([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1]] = desescaperXml(a[2] ?? a[3]);
+      const noeud = { nom: m[3], attrs, enfants: [] };
+      parent.enfants.push(noeud);
+      if (!m[5]) pile.push(noeud);
+    }
+  }
+  return racine;
+}
+
+const enfantsXml = (n, nom) => n.enfants.filter(e => typeof e !== 'string' && (!nom || e.nom === nom));
+const texteXml   = n => typeof n === 'string' ? n : n.enfants.map(texteXml).join('');
+
+function premierXml(n, nom) {
+  for (const e of n.enfants) {
+    if (typeof e === 'string') continue;
+    if (e.nom === nom) return e;
+    const r = premierXml(e, nom);
+    if (r) return r;
+  }
+  return null;
+}
+
+function tousXml(n, nom, acc = []) {
+  for (const e of n.enfants) {
+    if (typeof e === 'string') continue;
+    if (e.nom === nom) acc.push(e);
+    tousXml(e, nom, acc);
+  }
+  return acc;
+}
+
+// Caractères qui seraient pris pour de la mise en forme Markdown : mêmes règles
+// que Turndown (utilisé pour Word et HTML), pour un rendu homogène.
+const ECHAPPEMENTS_MD = [[/\\/g, '\\\\'], [/\*/g, '\\*'], [/^-/g, '\\-'], [/^\+ /g, '\\+ '], [/^(=+)/g, '\\$1'],
+  [/^(#{1,6}) /g, '\\$1 '], [/`/g, '\\`'], [/^~~~/g, '\\~~~'], [/\[/g, '\\['], [/\]/g, '\\]'], [/^>/g, '\\>'],
+  [/_/g, '\\_'], [/^(\d+)\. /g, '$1\\. ']];
+const echapperMd = s => ECHAPPEMENTS_MD.reduce((t, [re, r]) => t.replace(re, r), s);
+
+// Styles utiles d'un document OpenDocument : gras / italique des styles de
+// texte, listes numérotées, pages masquées (présentations).
+function stylesOdf(racines) {
+  const texte = new Map(), listes = new Map(), pagesMasquees = new Set(), parents = new Map();
+  for (const racine of racines) {
+    for (const s of tousXml(racine, 'style:style')) {
+      const nom = s.attrs['style:name'];
+      const tp  = enfantsXml(s, 'style:text-properties')[0];
+      const pp  = enfantsXml(s, 'style:drawing-page-properties')[0];
+      const st  = {};
+      if (tp && tp.attrs['fo:font-weight']) st.gras = /^(bold|[6-9]00)$/.test(tp.attrs['fo:font-weight']);
+      if (tp && tp.attrs['fo:font-style'])  st.italique = /^(italic|oblique)$/.test(tp.attrs['fo:font-style']);
+      // Styles nommés de LibreOffice (« Strong Emphasis », « Emphasis »)
+      if (st.gras === undefined && /Strong/.test(nom)) st.gras = true;
+      if (st.italique === undefined && /^Emphasis$/.test(nom)) st.italique = true;
+      texte.set(nom, st);
+      if (s.attrs['style:parent-style-name']) parents.set(nom, s.attrs['style:parent-style-name']);
+      if (pp && pp.attrs['presentation:visibility'] === 'hidden') pagesMasquees.add(nom);
+    }
+    for (const l of tousXml(racine, 'text:list-style')) {
+      const niveaux = [];
+      for (const n of enfantsXml(l)) niveaux[Number(n.attrs['text:level'] || 1)] = n.nom === 'text:list-level-style-number';
+      listes.set(l.attrs['style:name'], niveaux);
+    }
+  }
+  // Héritage : un style sans gras/italique explicite prend ceux de son parent
+  const resoudre = (nom, vus = new Set()) => {
+    const st = texte.get(nom) || {};
+    const p = parents.get(nom);
+    if (!p || vus.has(nom)) return st;
+    vus.add(nom);
+    const sp = resoudre(p, vus);
+    return { gras: st.gras ?? sp.gras, italique: st.italique ?? sp.italique };
+  };
+  const styles = new Map([...texte.keys()].map(n => [n, resoudre(n)]));
+  return { styles, listes, pagesMasquees };
+}
+
+// Ouvre un fichier OpenDocument : arbre de content.xml, styles, images préchargées
+async function ouvrirOdf(ab, ctx) {
+  const zip = await JSZip.loadAsync(ab);
+  const fContenu = zip.file('content.xml');
+  if (!fContenu) throw new Error('Fichier OpenDocument invalide (content.xml absent).');
+  const racine = analyserXml(await fContenu.async('text'));
+  const fStyles = zip.file('styles.xml');
+  const racineStyles = fStyles ? analyserXml(await fStyles.async('text')) : null;
+
+  const c = { ...stylesOdf([racineStyles, racine].filter(Boolean)), notes: [], images: [], imageParChemin: new Map(),
+              donneesImages: new Map(), dossierImages: ctx.dossierImages };
+  const chemins = new Set(tousXml(racine, 'draw:image').map(i => i.attrs['xlink:href']).filter(h => h && !/^[a-z]+:/i.test(h)));
+  for (const h of chemins) {
+    const f = zip.file(h.replace(/^\.\//, ''));
+    if (f) c.donneesImages.set(h, await f.async('arraybuffer'));
+  }
+  return { racine, c };
+}
+
+function imageOdf(cadre, c) {
+  // Aperçu d'un objet incorporé (graphique, formule) : pas une vraie image
+  if (premierXml(cadre, 'draw:object') || premierXml(cadre, 'draw:object-ole')) return '';
+  const img = premierXml(cadre, 'draw:image');
+  if (!img) return '';
+  const href  = img.attrs['xlink:href'] || '';
+  const titre = premierXml(cadre, 'svg:title') || premierXml(cadre, 'svg:desc');
+  const alt   = (titre ? texteXml(titre) : '').replace(/[[\]\s]+/g, ' ').trim();
+  if (/^[a-z]+:/i.test(href)) return `![${alt}](${href})`;
+  const data = c.donneesImages.get(href);
+  if (!data) return '';
+  if (!c.imageParChemin.has(href)) {
+    const ext = (href.split('.').pop() || 'bin').toLowerCase();
+    const chemin = `${c.dossierImages}/image${c.images.length + 1}.${ext}`;
+    c.images.push({ chemin, type: TYPES_IMAGE[ext] || '', data });
+    c.imageParChemin.set(href, chemin);
+  }
+  return `![${alt}](${c.imageParChemin.get(href)})`;
+}
+
+// Entoure de ** ou * sans englober les espaces de bord (« **mot** » et non « ** mot** »)
+function encadrerMd(t, { gras, italique } = {}) {
+  const marque = gras && italique ? '***' : gras ? '**' : italique ? '*' : '';
+  const m = t.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return marque && m[2] ? m[1] + marque + m[2] + marque + m[3] : t;
+}
+
+// Contenu en ligne d'un paragraphe OpenDocument → Markdown
+function enLigneOdf(n, c) {
+  return n.enfants.map(e => {
+    if (typeof e === 'string') return echapperMd(e.replace(/\s+/g, ' '));
+    switch (e.nom) {
+      case 'text:s':          return ' '.repeat(Math.min(Number(e.attrs['text:c'] || 1), 100));
+      case 'text:tab':        return ' ';
+      case 'text:line-break': return '\n';
+      case 'text:span':       return encadrerMd(enLigneOdf(e, c), c.styles.get(e.attrs['text:style-name']));
+      case 'text:a': {
+        const t = enLigneOdf(e, c), href = e.attrs['xlink:href'];
+        return href && t.trim() ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
+      }
+      case 'text:note': {   // note de bas de page → note Markdown [^n]
+        const corps = premierXml(e, 'text:note-body');
+        c.notes.push(corps ? blocsOdf(corps, c).join(' ').replace(/\s*\n\s*/g, ' ') : '');
+        return `[^${c.notes.length}]`;
+      }
+      case 'draw:frame': {
+        const boite = enfantsXml(e, 'draw:text-box')[0];
+        return boite ? blocsOdf(boite, c).join(' ') : imageOdf(e, c);
+      }
+      // Commentaires, repères, changements suivis : pas du texte du document
+      case 'office:annotation': case 'office:annotation-end': case 'text:bookmark': case 'text:bookmark-start':
+      case 'text:bookmark-end': case 'text:soft-page-break': case 'text:change-start': case 'text:change-end':
+        return '';
+      default: return enLigneOdf(e, c);   // champs (date, numéro de page…), text:sequence, etc.
+    }
+  }).join('');
+}
+
+// Liste OpenDocument → lignes Markdown (puces ou numéros, niveaux imbriqués)
+function listeOdf(liste, c, niveau = 1, retrait = '', styleHerite) {
+  const style = liste.attrs['text:style-name'] || styleHerite;
+  const ordonnee = (c.listes.get(style) || [])[niveau] === true;
+  const lignes = [];
+  let numero = 0;
+  for (const item of enfantsXml(liste)) {
+    if (item.nom !== 'text:list-item' && item.nom !== 'text:list-header') continue;
+    const marque = item.nom === 'text:list-header' ? '' : ordonnee ? `${++numero}. ` : '- ';
+    let premier = true;
+    for (const e of enfantsXml(item)) {
+      if (e.nom === 'text:list') {
+        lignes.push(listeOdf(e, c, niveau + 1, retrait + ' '.repeat(Math.max(marque.length, 2)), style));
+      } else if (e.nom === 'text:p' || e.nom === 'text:h') {
+        const t = enLigneOdf(e, c).replace(/\s*\n\s*/g, ' ').trim();
+        if (!t) continue;
+        lignes.push(retrait + (premier ? marque : ' '.repeat(marque.length)) + t);
+        premier = false;
+      }
+    }
+  }
+  return lignes.filter(Boolean).join('\n');
+}
+
+// Tableau OpenDocument → tableau Markdown. Les cellules fusionnées sont suivies de
+// cellules « couvertes » : la grille est déjà alignée, aucune colonne ne se perd.
+function tableauOdf(table, c) {
+  const lignes = [];
+  const parcourir = n => {
+    for (const e of enfantsXml(n)) {
+      if (e.nom === 'table:table-row') {
+        const ligne = [];
+        for (const cell of enfantsXml(e)) {
+          if (cell.nom !== 'table:table-cell' && cell.nom !== 'table:covered-table-cell') continue;
+          const v = cell.nom === 'table:covered-table-cell' ? '' : blocsOdf(cell, c).join('\n');
+          const rep = Math.min(Number(cell.attrs['table:number-columns-repeated'] || 1), 1000);
+          for (let k = 0; k < rep; k++) ligne.push(v);
+        }
+        const rep = Math.min(Number(e.attrs['table:number-rows-repeated'] || 1), 1000);
+        for (let k = 0; k < rep; k++) lignes.push(ligne);
+      } else if (/^table:table-(header-rows|rows|row-group)$/.test(e.nom)) {
+        parcourir(e);
+      }
+    }
+  };
+  parcourir(table);
+  const grille = rognerGrille(lignes);
+  return grille.length ? construireTableMd(grille) : '';
+}
+
+// Blocs (titres, paragraphes, listes, tableaux) d'un conteneur OpenDocument
+function blocsOdf(n, c) {
+  const blocs = [];
+  let listePrec = null;   // type de la liste qui vient d'être ajoutée (null si autre bloc)
+  for (const e of enfantsXml(n)) {
+    if (e.nom === 'text:list') {
+      // LibreOffice découpe souvent une même liste en plusieurs <text:list>
+      // consécutives (un niveau d'imbrication par liste) : on les recolle.
+      const l = listeOdf(e, c);
+      const ordonnee = (c.listes.get(e.attrs['text:style-name']) || [])[1] === true;
+      if (l && listePrec === ordonnee) blocs[blocs.length - 1] += '\n' + l;
+      else if (l) blocs.push(l);
+      if (l) listePrec = ordonnee;
+      continue;
+    }
+    const avant = blocs.length;
+    switch (e.nom) {
+      case 'text:h': {
+        const t = enLigneOdf(e, c).replace(/\s*\n\s*/g, ' ').trim();
+        if (t) blocs.push('#'.repeat(Math.min(Math.max(Number(e.attrs['text:outline-level'] || 1), 1), 6)) + ' ' + t);
+        break;
+      }
+      case 'text:p': {
+        const t = enLigneOdf(e, c).trim();
+        if (t) blocs.push(t);
+        break;
+      }
+      case 'table:table': { const t = tableauOdf(e, c); if (t) blocs.push(t); break; }
+      // Tables des matières et index (redondants), suivi des modifications (texte supprimé)
+      case 'text:table-of-content': case 'text:alphabetical-index': case 'text:illustration-index':
+      case 'text:table-index': case 'text:object-index': case 'text:user-index': case 'text:bibliography':
+      case 'text:tracked-changes': case 'office:forms': case 'text:sequence-decls': case 'text:variable-decls':
+        break;
+      default: blocs.push(...blocsOdf(e, c));   // sections, zones de texte…
+    }
+    if (blocs.length !== avant) listePrec = null;
+  }
+  return blocs;
+}
+
+// .odt (LibreOffice Writer) → Markdown
+async function convOdt(ab, nom, ctx) {
+  const { racine, c } = await ouvrirOdf(ab, ctx);
+  const corps = premierXml(racine, 'office:text');
+  if (!corps) throw new Error('Aucun texte trouvé dans ce fichier ODT.');
+  const blocs = blocsOdf(corps, c);
+  if (c.notes.length) blocs.push(c.notes.map((t, i) => `[^${i + 1}]: ${t}`).join('\n'));
+  return { md: (blocs.join('\n\n') || '_(document vide)_') + '\n', images: c.images };
+}
+
+// .odp (LibreOffice Impress) → Markdown
+async function convOdp(ab, nom, ctx) {
+  const { racine, c } = await ouvrirOdf(ab, ctx);
+  const pres = premierXml(racine, 'office:presentation');
+  const pages = pres ? enfantsXml(pres, 'draw:page') : [];
+  if (!pages.length) throw new Error('Aucune diapositive trouvée dans ce fichier ODP.');
+  const IGNOREES = new Set(['page-number', 'footer', 'date-time', 'header']);
+  const blocs = [`# ${baseName(nom)}`];
+
+  pages.forEach((page, i) => {
+    let titre = null;
+    const contenu = [];
+    // Formes dans l'ordre du document, groupes compris
+    const formes = n => enfantsXml(n).flatMap(e => e.nom === 'draw:g' ? formes(e) : e.nom === 'presentation:notes' ? [] : [e]);
+    for (const forme of formes(page)) {
+      const classe = forme.attrs['presentation:class'];
+      if (IGNOREES.has(classe)) continue;
+      const boite = enfantsXml(forme, 'draw:text-box')[0];
+      if (classe === 'title') {
+        const t = texteXml(forme).replace(/\s+/g, ' ').trim();
+        if (t && titre === null) { titre = t; continue; }
+      }
+      const table = premierXml(forme, 'table:table');
+      if (table) { const t = tableauOdf(table, c); if (t) contenu.push(t); }
+      else if (boite) contenu.push(...blocsOdf(boite, c));
+      else if (forme.nom === 'draw:frame') { const img = imageOdf(forme, c); if (img) contenu.push(img); }
+      else contenu.push(...blocsOdf(forme, c));   // formes dessinées contenant du texte
+    }
+
+    const notesPage = enfantsXml(page, 'presentation:notes')[0];
+    const notes = notesPage
+      ? tousXml(notesPage, 'draw:frame').filter(f => f.attrs['presentation:class'] === 'notes').flatMap(f => blocsOdf(f, c))
+      : [];
+    if (notes.length) contenu.push('> **Notes de l\'orateur :** ' + notes.join('\n>\n> '));
+
+    const masquee = c.pagesMasquees.has(page.attrs['draw:style-name']) ? ' *(masquée)*' : '';
+    blocs.push(`## Diapositive ${i + 1}${titre ? ' : ' + titre : ''}${masquee}`, ...contenu);
+  });
+
+  return { md: blocs.join('\n\n') + '\n', images: c.images };
+}
 </script>
 
 <script>
@@ -625,8 +942,6 @@ const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultaném
 const FORMATS_REFUSES = {
   '.doc': 'Format Word ancien (.doc) non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
   '.ppt': 'Format PowerPoint ancien (.ppt) non pris en charge. Ouvrez dans PowerPoint et enregistrez en .pptx, puis recommencez.',
-  '.odt': 'Format OpenDocument texte. Ouvrez dans LibreOffice Writer et enregistrez en .docx, puis recommencez.',
-  '.odp': 'Format OpenDocument présentation. Ouvrez dans LibreOffice Impress et enregistrez en .pptx, puis recommencez.',
   '.rtf': 'Format RTF non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
 };
 
@@ -703,7 +1018,8 @@ function telechargerBlob(contenu, nom) {
 let turndownPartage = null;
 function creerTurndown() {
   if (turndownPartage) return turndownPartage;
-  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
+  // emDelimiter '*' : même italique que pour les autres formats (et « _ » colle mal dans un mot)
+  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced', emDelimiter: '*' });
 
   // Tableaux : reconstruits depuis le DOM (voir grilleTableau). Le contenu déjà
   // converti des lignes et cellules est ignoré, d'où une sortie vide pour elles.
@@ -774,7 +1090,34 @@ async function convDocx(ab, nom, ctx) {
       return image.readAsArrayBuffer().then(data => { entree.data = data; return { src: entree.chemin }; });
     }),
   });
-  return { md: creerTurndown().turndown(res.value), images };
+  return { md: notesWordEnMarkdown(res.value, creerTurndown()), images };
+}
+
+// Notes de bas de page et de fin : mammoth produit des liens internes ([1] vers
+// #footnote-…, ↑ en retour) qui ne mènent nulle part en Markdown. On en fait des
+// notes Markdown natives ([^1] … [^1]: texte), comme pour les fichiers .odt.
+function notesWordEnMarkdown(html, td) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const numeros = new Map();   // id de la note → numéro d'affichage
+  for (const a of doc.querySelectorAll('a[href^="#footnote-"], a[href^="#endnote-"]')) {
+    const id = a.getAttribute('href').slice(1);
+    if (/-ref-/.test(id)) continue;   // lien de retour ↑, traité avec la note
+    if (!numeros.has(id)) numeros.set(id, numeros.size + 1);
+    // Marqueur hors de portée de l'échappement de Turndown, remplacé ensuite
+    (a.closest('sup') || a).replaceWith(`\uE000${numeros.get(id)}\uE001`);
+  }
+  const notes = [];
+  for (const [id, n] of numeros) {
+    const li = doc.getElementById(id);
+    if (!li) continue;
+    li.querySelectorAll('a[href*="-ref-"]').forEach(a => a.remove());
+    notes.push(`[^${n}]: ${td.turndown(li.innerHTML).replace(/\s*\n+\s*/g, ' ').trim()}`);
+    const liste = li.parentElement;
+    li.remove();
+    if (liste && liste.tagName === 'OL' && !liste.children.length) liste.remove();
+  }
+  const md = td.turndown(doc.body.innerHTML).replace(/\uE000(\d+)\uE001/g, '[^$1]');
+  return notes.length ? md + '\n\n' + notes.join('\n') : md;
 }
 
 // ---- PDF : reconstruction de la structure ----
@@ -1007,7 +1350,7 @@ async function convHtml(ab, nom, ctx) {
 
 // Extensions routées vers le worker (les autres restent sur le fil principal :
 // .docx/.html ont besoin du DOM, .pdf a déjà son propre worker PDF.js).
-const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv', '.pptx']);
+const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv', '.pptx', '.odt', '.odp']);
 
 // URLs des libs chargées DANS le worker. Surchargables pour les tests via
 // self.__URLS_LIBS_TEST__ (page.route de Playwright n'intercepte pas les
@@ -1026,7 +1369,7 @@ const BOOTSTRAP_TRAVAILLEUR = `
 const CONVERTISSEURS_W = {};
 try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; } catch (e) {}
 try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
-try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; } catch (e) {}
+try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; CONVERTISSEURS_W['.odt'] = convOdt; CONVERTISSEURS_W['.odp'] = convOdp; } catch (e) {}
 self.onmessage = async (e) => {
   const { id, ext, nom, ab, ctx } = e.data;
   try {
@@ -1476,7 +1819,7 @@ function verifierBibliotheques() {
   if (!window.pdfjsLib)        manquantes.push('PDF.js → .pdf');
   if (!window.XLSX)            manquantes.push('SheetJS → .xlsx/.xls');
   if (!window.Papa)            manquantes.push('PapaParse → .csv/.tsv');
-  if (!window.JSZip)           manquantes.push('JSZip → .pptx / .zip');
+  if (!window.JSZip)           manquantes.push('JSZip → .pptx / .odt / .odp / .zip');
 
   if (manquantes.length) {
     const b = document.getElementById('bandeau-cdn');
@@ -1502,6 +1845,8 @@ function verifierBibliotheques() {
   }
   if (window.JSZip) {
     CONVERTISSEURS['.pptx'] = convPptx;
+    CONVERTISSEURS['.odt']  = convOdt;
+    CONVERTISSEURS['.odp']  = convOdp;
   }
   // Toujours disponibles
   CONVERTISSEURS['.txt'] = convTxt;

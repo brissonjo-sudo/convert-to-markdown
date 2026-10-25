@@ -157,10 +157,33 @@
     return new File([await zip.generateAsync({ type: 'arraybuffer' })], nom);
   }
 
+  // ---------------------------------------------------------------- OpenDocument
+  const ODF_NS = ['office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"', 'style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"',
+    'text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"', 'table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"',
+    'draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"', 'fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"',
+    'xlink="http://www.w3.org/1999/xlink"', 'svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"',
+    'presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"'].map(n => 'xmlns:' + n).join(' ');
+
+  // corps : XML placé dans office:text (odt) ou office:presentation (odp)
+  // styles : styles automatiques ; images : { 'Pictures/x.png': base64 }
+  async function odf(nom, type, corps, { styles = '', images = {} } = {}) {
+    const zip = new JSZip();
+    zip.file('mimetype', `application/vnd.oasis.opendocument.${type}`);
+    const conteneur = type === 'text' ? 'office:text' : 'office:presentation';
+    zip.file('content.xml', `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${ODF_NS} office:version="1.3">` +
+      `<office:automatic-styles>${styles}</office:automatic-styles><office:body><${conteneur}>${corps}</${conteneur}>` +
+      `</office:body></office:document-content>`);
+    for (const [chemin, b64] of Object.entries(images)) zip.file(chemin, b64VersOctets(b64));
+    return new File([await zip.generateAsync({ type: 'arraybuffer' })], nom);
+  }
+  const odt = (nom, corps, options) => odf(nom, 'text', corps, options);
+  const odp = (nom, corps, options) => odf(nom, 'presentation', corps, options);
+
   window.Fab = {
     PNG_B64, texte, pdf, classeur,
     docx, docxPara, docxImage,
     pptx, pptxTitre, pptxCorps, pptxZone, pptxTableau, pptxImage,
+    odt, odp,
   };
 
   // Résumé de l'état de l'application après conversion (journal + résultats).
