@@ -104,6 +104,10 @@
     .zone-depot-titre { font-size: 1.1rem; font-weight: 600; margin-bottom: .25rem; }
     .zone-depot-sub   { font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
     .zone-depot-sub span { color: var(--accent); text-decoration: underline; }
+    .option {
+      display: flex; align-items: center; justify-content: center; gap: .4rem;
+      margin-top: .75rem; font-size: .85rem; color: var(--muted); cursor: pointer;
+    }
     .formats-badge {
       display: inline-block;
       background: #f1f5f9; border-radius: 20px;
@@ -238,6 +242,12 @@
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
     <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Images (OCR)</span>
   </div>
+
+  <!-- Hors de la zone de dépôt : un clic ici n'ouvre pas le sélecteur de fichiers -->
+  <label class="option">
+    <input type="checkbox" id="opt-yaml">
+    Ajouter un en-tête Obsidian (titre, fichier source, date)
+  </label>
 
   <!-- Section journal -->
   <section class="journal-section" id="journal-section" hidden>
@@ -1810,7 +1820,7 @@ async function traiterUnFichier(fichier) {
     // Détecter alerte scan PDF
     const estImage = EXTENSIONS_IMAGE_OCR.has(ext);
     const estScan  = estImage || (ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan'));
-    const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    const resultat = { nom, nomMd: sortie.nomMd, md, images, date: dateLocale() };
     if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
 
@@ -1918,6 +1928,13 @@ function initUI() {
     setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000);
   });
 
+  // Option d'en-tête YAML, mémorisée pour ce navigateur
+  const optYaml = document.getElementById('opt-yaml');
+  try { optYaml.checked = localStorage.getItem('opt-yaml') === '1'; } catch { /* stockage indisponible */ }
+  optYaml.addEventListener('change', () => {
+    try { localStorage.setItem('opt-yaml', optYaml.checked ? '1' : '0'); } catch { /* stockage indisponible */ }
+  });
+
   verifierBibliotheques();
   enregistrerServiceWorker();
 }
@@ -1978,7 +1995,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
     nomSpan.classList.remove('non-cliquable');
     const { nomMd, images } = resultat;
     // resultat.md est lu au moment du clic : l'OCR peut le remplacer
-    const apercu = () => ouvrirApercu(nomMd, resultat.md);
+    const apercu = () => ouvrirApercu(nomMd, contenuMd(resultat));
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
@@ -2000,7 +2017,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
     if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
     btnDl.addEventListener('click', () => images.length
       ? genererZip([resultat], baseName(nomMd) + '.zip')
-      : telechargerBlob(resultat.md, nomMd));
+      : telechargerBlob(contenuMd(resultat), nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
@@ -2071,15 +2088,26 @@ function fermerApercu() {
   apercuOverlay.hidden = true;
 }
 
+// ---- En-tête YAML (propriétés Obsidian) ----
+// Ajouté à l'export (aperçu, copie, téléchargement, ZIP) et non à la conversion :
+// cocher la case s'applique aussi aux fichiers déjà convertis, OCR compris.
+const dateLocale = () => { const d = new Date(); return `${d.getFullYear()}-${deuxChiffres(d.getMonth() + 1)}-${deuxChiffres(d.getDate())}`; };
+
+function contenuMd(r) {
+  if (!document.getElementById('opt-yaml').checked) return r.md;
+  // JSON.stringify : chaîne entre guillemets valide en YAML (« : », « # », guillemets)
+  return `---\ntitle: ${JSON.stringify(baseName(r.nomMd))}\nsource: ${JSON.stringify(r.nom)}\ndate: ${r.date}\n---\n\n${r.md}`;
+}
+
 // ---- ZIP ----
 // Archive des .md (noms déjà uniques, voir reserverSortie) et de leurs images,
 // rangées dans images/<document>/ comme les liens du Markdown l'indiquent.
 async function genererZip(liste = resultats, nomArchive = 'conversions_markdown.zip') {
   if (!liste.length) return;
   const zip = new JSZip();
-  for (const { nomMd, md, images } of liste) {
-    zip.file(nomMd, md);
-    for (const img of images || []) zip.file(img.chemin, img.data);
+  for (const r of liste) {
+    zip.file(r.nomMd, contenuMd(r));
+    for (const img of r.images || []) zip.file(img.chemin, img.data);
   }
   telechargerBlob(await zip.generateAsync({ type: 'blob' }), nomArchive);
 }
