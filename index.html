@@ -2005,7 +2005,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
       const btnOcr = document.createElement('button');
       btnOcr.className = 'btn btn-primaire btn-petit';
       btnOcr.textContent = '🔍 Reconnaître le texte (OCR)';
-      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors-ligne.';
+      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors ligne.';
       btnOcr.addEventListener('click', () => lancerOcr(li, resultat, btnOcr));
       actions.appendChild(btnOcr);
     }
