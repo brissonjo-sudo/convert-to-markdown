@@ -52,6 +52,32 @@ test('PDF scanné : texte reconnu par OCR, page par page', async ({ page }) => {
   expect(normaliser(fs.readFileSync(await dl.path(), 'utf8'))).toContain('stationnement est interdit');
 });
 
+test('PDF texte avec une page scannée : texte gardé, seule la page scannée passe à l\'OCR', async ({ page }) => {
+  await ouvrirApp(page);
+  await page.evaluate(async () => traiterFichiers([await Fab.pdfScanne('dossier.pdf', [
+    { texte: [{ t: 'Rapport du service voirie', x: 72, y: 760 }, { t: 'Le budget est stable cette annee.', x: 72, y: 730 }] },
+    ['Annexe signee', '', 'Le maire de Saint-Ouen'],
+    { texte: [{ t: 'Conclusion du rapport.', x: 72, y: 760 }] },
+    { texte: [] },   // page blanche : sans image, elle n'est pas un scan
+  ])]));
+  // Avant OCR : le texte des pages 1 et 3 est déjà là, la page 2 est signalée
+  await expect(page.locator('.journal-item')).toHaveClass(/warn/);
+  await expect(page.locator('.journal-msg')).toHaveText('Texte extrait. Page 2 scannée : lancez l\'OCR pour la reconnaître.');
+  const avant = await page.evaluate(() => resultats[0].md);
+  expect(avant).toContain('Le budget est stable cette annee.');
+  expect(avant).toContain('> ⚠️ Page 2 : image sans texte (scan probable)');
+
+  await page.locator('.journal-actions-item button', { hasText: 'OCR' }).click();
+  await expect(page.locator('.journal-item')).toHaveClass(/ok/, { timeout: 150_000 });
+  const md = await page.evaluate(() => resultats[0].md);
+  expect(md).toMatch(/^# dossier\n\n> Page 2 : texte obtenu par reconnaissance optique \(OCR\), confiance moyenne \d+ %/);
+  expect(md).not.toContain('scan probable');
+  const texte = normaliser(md);
+  // Ordre des pages conservé ; texte d'origine intact, page 2 reconnue (son texte,
+  // plus gros que celui des pages 1 et 3, peut devenir titre : tailles comparées)
+  expect(texte).toMatch(/\*page 1\*\n\nrapport du service voirie le budget est stable cette annee\.[\s\S]*\*page 2\*\n\n(#+ )?annexe signee[\s\S]*le maire de saint-ouen[\s\S]*\*page 3\*\n\nconclusion du rapport\./);
+});
+
 test('photo d\'un document : texte reconnu par OCR, à la demande', async ({ page }) => {
   await ouvrirApp(page);
   await page.evaluate(async () => traiterFichiers([await Fab.imageTexte('courrier.jpg',
