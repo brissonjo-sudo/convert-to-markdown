@@ -50,6 +50,8 @@ Détails techniques : voir [Sécurité](#sécurité).
 | Photo de document | `.png`, `.jpg`, `.jpeg`, `.webp` | Texte reconnu par **OCR** (français), à la demande | Tesseract.js |
 | Texte | `.txt` | Texte brut | Natif |
 | Page web | `.html`, `.htm` | Structure, tableaux, images intégrées (extraites en fichiers) | Turndown |
+| Courriel | `.eml` | Expéditeur, destinataires, date, objet, corps (version HTML de préférence), images intégrées ; pièces jointes extraites dans `pieces-jointes/<document>/` | Natif + Turndown |
+| Livre numérique | `.epub` | Chapitres dans l'ordre de lecture, titres, images | JSZip + Turndown |
 
 Les **images** des documents sont enregistrées à côté du Markdown, dans `images/<document>/`, avec des liens relatifs : un document qui contient des images se télécharge en `.zip` (le `.md` et son dossier d'images).
 
@@ -67,6 +69,7 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 - ✅ **Interface fluide**, même pendant la conversion de gros tableurs
 - ✅ **Encodage détecté automatiquement** (UTF-8, UTF-16, Windows-1252) pour les CSV et TXT
 - ✅ **Formats LibreOffice** (`.odt`, `.ods`, `.odp`) au même titre que Microsoft Office
+- ✅ **Mode sombre** : l'interface suit le réglage de votre système
 - ✅ **Utilisable entièrement au clavier**
 
 ---
@@ -76,6 +79,8 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
 - **OCR** : français uniquement. La qualité dépend de celle du scan ou de la photo : le texte reconnu est signalé « à relire », avec la confiance moyenne. Une page est reconnue comme scannée si elle contient une image et presque pas de texte : une page mêlant texte et passage scanné n'est pas détectée. Sur une photo de quelques lignes, la séparation entre paragraphes est approximative.
 - **Structure des PDF** : un PDF ne contient que du texte positionné ; titres et paragraphes sont déduits de la mise en page (taille de police, interlignes). Les mises en page complexes (plusieurs colonnes, tableaux) sont restituées imparfaitement. Un mot coupé en fin de ligne garde son trait d'union (« collec-tivités ») : sans dictionnaire, impossible de le distinguer d'un mot composé (« porte-monnaie »).
+- **Courriels** : format `.eml` uniquement, produit par Thunderbird, Outlook sur le web et le nouvel Outlook (*Télécharger*). L'Outlook classique enregistre en `.msg`, format non pris en charge. Les images distantes d'un courriel (souvent des pixels de suivi) ne sont pas recopiées, seul leur texte alternatif est gardé.
+- **Livres numériques** : les `.epub` protégés par DRM ne sont pas lisibles.
 - **Images `.emf` / `.wmf`** (fréquentes dans les documents Office anciens) : extraites telles quelles, mais la plupart des lecteurs Markdown ne les affichent pas.
 - **Première visite** : une connexion internet est nécessaire pour télécharger les composants de l'outil (environ 3 Mo, une seule fois), plus environ 5 Mo au premier usage de l'OCR. Tout reste ensuite disponible hors ligne.
 
@@ -121,11 +126,12 @@ Ouvert directement (double-clic sur `index.html`, sans serveur), l'outil fonctio
 - ✅ Construction DOM sécurisée (pas d'`innerHTML` avec données externes → pas de XSS)
 - ✅ HTML malveillant neutralisé (DOMParser inerte, `<script>`/`<style>` retirés)
 - ✅ Liens exécutables (`javascript:`, `vbscript:`, `data:`) retirés du Markdown produit : un clic dans votre éditeur ne peut rien exécuter
+- ✅ Pièces jointes des courriels : noms rendus sûrs (un nom piégé « ../ » ne peut pas sortir de son dossier à l'extraction du ZIP) ; images distantes non recopiées
 - ✅ Validation par tests automatisés en navigateur (Playwright), à chaque modification
 
 ### Tests
 
-Une suite de tests Playwright (`tests/`) vérifie chaque format de bout en bout dans Chromium : fichiers générés à la volée (PDF, PDF scanné, photo, Word, PowerPoint, Excel, LibreOffice), fichiers réels produits par LibreOffice et pandoc (`tests/fichiers/`, régénérables par `generer.sh`), contenu exact du Markdown produit, archives ZIP téléchargées, Web Worker et repli, OCR, collage, fonctionnement hors ligne, confidentialité (CSP et SRI). Tout test échoue s'il provoque une violation de la CSP ou un échec de vérification d'empreinte. Elle tourne **sans réseau** : un petit serveur de test (`tests/serveur.js`) sert l'application en remplaçant les CDN par les mêmes versions des bibliothèques, installées via npm.
+Une suite de tests Playwright (`tests/`) vérifie chaque format de bout en bout dans Chromium : fichiers générés à la volée (PDF, PDF scanné, photo, Word, PowerPoint, Excel, LibreOffice, courriel, EPUB), fichiers réels produits par LibreOffice et pandoc (`tests/fichiers/`, régénérables par `generer.sh`), contenu exact du Markdown produit, archives ZIP téléchargées, Web Worker et repli, OCR, collage, fonctionnement hors ligne, confidentialité (CSP et SRI). Tout test échoue s'il provoque une violation de la CSP ou un échec de vérification d'empreinte. Elle tourne **sans réseau** : un petit serveur de test (`tests/serveur.js`) sert l'application en remplaçant les CDN par les mêmes versions des bibliothèques, installées via npm.
 
 Les tests se lancent automatiquement sur GitHub à chaque pull request et à chaque modification de `main`, avec une vérification des empreintes SRI contre les fichiers réellement servis par les CDN (`tests/verifier-cdn.js`). Pour les lancer localement :
 
@@ -156,7 +162,7 @@ L'application ne demande ni compilation ni dépendance : `package.json` ne sert 
 ## 📅 Roadmap (idées, non engageant)
 
 - 🔭 OCR dans d'autres langues que le français
-- 🔭 Support `.epub` (e-books)
+- 🔭 Courriels Outlook `.msg`
 - 🔭 Interface mobile optimisée (actuellement responsive mais perfectible)
 
 ---
