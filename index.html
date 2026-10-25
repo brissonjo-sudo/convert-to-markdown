@@ -235,7 +235,7 @@
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
-    <p class="zone-depot-sub">ou <span>cliquez pour choisir</span></p>
+    <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
     <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT</span>
   </div>
 
@@ -1850,6 +1850,19 @@ function initUI() {
   // Sélecteur de fichiers
   input.addEventListener('change', () => {
     if (input.files.length) { traiterFichiers(input.files); input.value = ''; }
+  });
+
+  // Coller (Ctrl+V) : fichiers copiés, ou texte copié depuis Word, un mail, une page web
+  document.addEventListener('paste', e => {
+    if (e.target.closest && e.target.closest('input, textarea, [contenteditable]')) return;
+    const d = e.clipboardData;
+    if (!d) return;
+    const html = d.getData('text/html'), texte = d.getData('text/plain');
+    if (d.files.length) traiterFichiers(d.files);
+    else if (html) traiterFichiers([new File([html], 'presse-papiers.html', { type: 'text/html' })]);
+    else if (texte.trim()) traiterFichiers([new File([texte], 'presse-papiers.txt', { type: 'text/plain' })]);
+    else return;
+    e.preventDefault();
   });
 
   // Bouton ZIP (fonction fléchée : ne pas transmettre l'événement de clic comme liste)
