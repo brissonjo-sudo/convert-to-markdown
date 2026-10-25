@@ -1881,12 +1881,13 @@ function initUI() {
 
   // Coller (Ctrl+V) : fichiers copiés, ou texte copié depuis Word, un mail, une page web
   document.addEventListener('paste', e => {
-    if (e.target.closest && e.target.closest('input, textarea, [contenteditable]')) return;
+    if (e.target.closest && e.target.closest('input:not([type=checkbox]), textarea, [contenteditable]')) return;
     const d = e.clipboardData;
     if (!d) return;
     const html = d.getData('text/html'), texte = d.getData('text/plain');
-    if (d.files.length) traiterFichiers(d.files);
-    else if (html) traiterFichiers([new File([html], 'presse-papiers.html', { type: 'text/html' })]);
+    // HTML d'abord : Excel et Word joignent une image de la sélection au texte copié
+    if (html) traiterFichiers([new File([html], 'presse-papiers.html', { type: 'text/html' })]);
+    else if (d.files.length) traiterFichiers(d.files);
     else if (texte.trim()) traiterFichiers([new File([texte], 'presse-papiers.txt', { type: 'text/plain' })]);
     else return;
     e.preventDefault();
