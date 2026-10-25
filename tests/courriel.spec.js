@@ -99,6 +99,15 @@ test('image intégrée et pièces jointes : fichiers extraits, noms rendus sûrs
   expect(r.journal[0].msg).toBe('Converti → dossier rh.md (+ 3 fichiers)');
 });
 
+test('images distantes (pixel de suivi) : non recopiées, texte alternatif gardé', async ({ page }) => {
+  const eml = ['Subject: Offre', 'Content-Type: text/html; charset=utf-8', '',
+    '<p>Bonjour <img src="https://suivi.exemple.fr/p.gif?id=42" width="1" height="1">' +
+    '<img src="http://exemple.fr/logo.png" alt="Logo de la société"></p>'].join('\r\n');
+  const r = await convertir(page, 'offre.eml', eml);
+  expect(r.resultats[0].md).toContain('Bonjour Logo de la société');
+  expect(r.resultats[0].md).not.toMatch(/https?:/);
+});
+
 test('texte brut en Latin-1 (8 bits) et objet absent', async ({ page }) => {
   const eml = ['From: agent@mairie.fr', 'Content-Type: text/plain; charset=iso-8859-1', 'Content-Transfer-Encoding: 8bit', '',
     'Réunion à 14 h, salle des fêtes.'].join('\r\n');

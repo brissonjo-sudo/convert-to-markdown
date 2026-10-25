@@ -1774,7 +1774,13 @@ async function convEml(ab, nom, ctx) {
       cites.add(f);
       return q + lienFichier(f.chemin) + q;
     });
-    const r = await convHtml(new TextEncoder().encode(html).buffer, nom, ctx);
+    // Images distantes (pixels de suivi) : l'éditeur Markdown les chargerait à
+    // l'ouverture de la note et préviendrait l'expéditeur. Texte alternatif gardé.
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('img[src]').forEach(img => {
+      if (/^\s*(https?:)?\/\//i.test(img.getAttribute('src'))) img.replaceWith(img.getAttribute('alt') || '');
+    });
+    const r = await convHtml(new TextEncoder().encode(doc.documentElement.outerHTML).buffer, nom, ctx);
     corps = r.md.trim();
     imagesHtml = r.images;
   } else if (texte !== null) {
