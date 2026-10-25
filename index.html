@@ -1207,13 +1207,24 @@ const LETTRE_PDF = /^[a-z][)]\s/i;                                // a) : nouvea
 const joindrePdf = (a, b) => /\p{L}-$/u.test(a) && /^\p{Ll}/u.test(b) ? a + b : a + ' ' + b;
 
 // Lignes d'une page → blocs Markdown (titres, paragraphes, listes)
-function blocsPage(p, corps, niveaux) {
-  const lignes = p.lignes;
-  // Interligne habituel : médiane des écarts entre lignes consécutives
+// Interligne habituel du document, sur toutes les pages (une page de deux lignes
+// n'en dit rien à elle seule). Premier quartile des écarts entre lignes
+// consécutives, et non la médiane : dans un document court, les blancs entre
+// paragraphes peuvent être aussi nombreux que les interlignes ordinaires.
+function interligneDocument(pages, corps) {
   const ecarts = [];
-  for (let i = 1; i < lignes.length; i++) { const e = lignes[i - 1].y - lignes[i].y; if (e > 0) ecarts.push(e); }
+  for (const p of pages) {
+    for (let i = 1; i < p.lignes.length; i++) {
+      const e = p.lignes[i - 1].y - p.lignes[i].y;
+      if (e > corps * 0.5) ecarts.push(e);
+    }
+  }
   ecarts.sort((a, b) => a - b);
-  const interligne = ecarts.length ? ecarts[Math.floor(ecarts.length / 2)] : corps * 1.2;
+  return ecarts.length ? ecarts[Math.floor(ecarts.length / 4)] : corps * 1.2;
+}
+
+function blocsPage(p, corps, niveaux, interligne) {
+  const lignes = p.lignes;
   // Bord droit du texte : une ligne qui s'arrête nettement avant est un retour
   // à la ligne voulu (adresse, signature), conservé tel quel.
   const bordDroit = lignes.reduce((m, l) => Math.max(m, l.fin), 0);
@@ -1233,7 +1244,10 @@ function blocsPage(p, corps, niveaux) {
   for (const l of lignes) {
     const prec   = bloc && bloc.derniere;
     const ecart  = prec ? prec.y - l.y : 0;
-    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15;
+    // Rupture : grand blanc, changement de taille, retour vers le haut (nouvelle
+    // colonne) ou changement de bloc détecté par l'OCR
+    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15 ||
+      ecart < -corps * 0.5 || l.bloc !== prec.bloc;
     const niveau = estTitrePdf(l, corps) && niveaux.get(taillePdf(l.taille));
 
     if (niveau) {
@@ -1269,6 +1283,22 @@ function blocsPage(p, corps, niveaux) {
   return blocs;
 }
 
+// Pages ({ lignes, haut, bas, hauteur }) → blocs Markdown : en-têtes et pieds
+// répétés retirés, titres déduits des tailles, repères de page discrets (hors
+// plan du document) pour pouvoir citer une page. Partagé par les PDF texte et l'OCR.
+function blocsPages(pages) {
+  retirerEntetesPieds(pages);
+  const corps   = tailleCorps(pages);
+  const niveaux = niveauxTitres(pages, corps);
+  const interligne = interligneDocument(pages, corps);
+  const blocs = [];
+  pages.forEach((p, i) => {
+    if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
+    blocs.push(...blocsPage(p, corps, niveaux, interligne));
+  });
+  return blocs;
+}
+
 // .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
@@ -1290,25 +1320,130 @@ async function convPdf(ab, nom) {
     // Détecter un PDF scanné
     const totalChars = pages.reduce((n, p) => n + p.lignes.reduce((m, l) => m + l.texte.length, 0), 0);
     if (totalChars < SEUIL_PDF_SCAN) {
-      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
+      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image) : aucun texte n'a pu être extrait. Utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.\n`;
     }
 
-    retirerEntetesPieds(pages);
-    const corps   = tailleCorps(pages);
-    const niveaux = niveauxTitres(pages, corps);
-
-    // Repères de page discrets (hors plan du document) pour pouvoir citer une page
-    const blocs = [`# ${baseName(nom)}`];
-    pages.forEach((p, i) => {
-      if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
-      blocs.push(...blocsPage(p, corps, niveaux));
-    });
-    return blocs.join('\n\n') + '\n';
+    return [`# ${baseName(nom)}`, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     // Libérer le document côté worker : sans cela, chaque PDF converti
     // reste en mémoire jusqu'à la fermeture de l'onglet.
     loadingTask.destroy();
   }
+}
+
+// ---- OCR des PDF scannés (Tesseract.js, à la demande) ----
+// Reconnaissance faite sur l'appareil (WebAssembly) : le document ne sort pas.
+// Environ 5 Mo téléchargés au premier usage seulement (moteur, données
+// françaises), puis conservés par le navigateur et le service worker.
+const OCR = {
+  script:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js',
+  worker:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js',
+  core:    'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0',
+  langues: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/fra@1.0.0/4.0.0_best_int',
+};
+const OCR_LARGEUR_MAX = 3000;   // pixels : ~300 ppp pour un A4, mémoire maîtrisée
+
+let tesseractPromise = null;
+function chargerTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (!tesseractPromise) {
+    tesseractPromise = new Promise((resolve, reject) => {
+      const s = Object.assign(document.createElement('script'), { src: OCR.script, crossOrigin: 'anonymous' });
+      s.onload  = () => window.Tesseract ? resolve() : reject(new Error('moteur de reconnaissance invalide'));
+      s.onerror = () => {
+        tesseractPromise = null;   // nouvel essai possible au prochain clic
+        s.remove();
+        reject(new Error('téléchargement du moteur impossible (connexion internet requise la première fois)'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return tesseractPromise;
+}
+
+// Lignes reconnues → même structure que les lignes d'un PDF texte
+// ({ texte, y, x, fin, taille }) : l'OCR profite de la même reconstruction
+// (paragraphes, titres, listes, en-têtes répétés) que les PDF, plus fiable que la
+// segmentation en paragraphes de Tesseract. Ordre de lecture de Tesseract conservé
+// (colonnes) ; ses blocs servent de séparations franches. Repère image (y vers le
+// bas) → repère PDF (y vers le haut) : y = −ligne de base. Taille : hauteur de
+// rangée (police), indépendante des jambages présents dans la ligne.
+function lignesOcr(data) {
+  return (data.blocks || []).flatMap((b, bloc) => (b.paragraphs || []).flatMap(p => p.lines || []).map(l => ({
+    texte: l.text.replace(/\s+/g, ' ').trim(),
+    x: l.bbox.x0,
+    fin: l.bbox.x1,
+    y: -(l.baseline ? (l.baseline.y0 + l.baseline.y1) / 2 : l.bbox.y1),
+    taille: (l.rowAttributes && l.rowAttributes.rowHeight) || (l.bbox.y1 - l.bbox.y0),
+    bloc,
+  }))).filter(l => l.texte);
+}
+
+// Rend chaque page en image (PDF.js) puis la fait lire par Tesseract
+async function ocrPdf(fichier, nom, progression) {
+  progression('OCR : chargement du moteur de reconnaissance…');
+  await chargerTesseract();
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(await lireCommeArrayBuffer(fichier)) });
+  let worker = null;
+  try {
+    const pdf = await loadingTask.promise;
+    worker = await Tesseract.createWorker('fra', 1, { workerPath: OCR.worker, corePath: OCR.core, langPath: OCR.langues });
+    const pages = [], confiances = [];
+    const canvas = document.createElement('canvas');
+    for (let i = 1; i <= pdf.numPages; i++) {
+      progression(`OCR : page ${i} / ${pdf.numPages}…`);
+      const page = await pdf.getPage(i);
+      const largeur = page.getViewport({ scale: 1 }).width;
+      const vue = page.getViewport({ scale: Math.min(300 / 72, OCR_LARGEUR_MAX / largeur) });
+      canvas.width = Math.ceil(vue.width);
+      canvas.height = Math.ceil(vue.height);
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.fillStyle = '#fff';
+      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      const { data } = await worker.recognize(canvas, {}, { blocks: true });
+      pages.push({ lignes: lignesOcr(data), haut: 0, bas: -canvas.height, hauteur: canvas.height });
+      confiances.push(data.confidence);
+      page.cleanup();
+    }
+    canvas.width = canvas.height = 0;   // libérer la mémoire de l'image
+
+    const confiance = Math.round(confiances.reduce((s, c) => s + c, 0) / confiances.length);
+    const blocs = [`# ${baseName(nom)}`,
+      `> Texte obtenu par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.`];
+    return [...blocs, ...blocsPages(pages)].join('\n\n') + '\n';
+  } finally {
+    if (worker) await worker.terminate();
+    loadingTask.destroy();
+  }
+}
+
+// Un OCR à la fois : chaque moteur occupe plusieurs centaines de Mo de mémoire
+let fileOcr = Promise.resolve();
+
+function lancerOcr(li, resultat, bouton) {
+  const msg   = li.querySelector('.journal-msg');
+  const icone = li.querySelector('.journal-icone');
+  bouton.disabled = true;
+  li.className = 'journal-item en-cours';
+  icone.textContent = '⏳';
+  msg.textContent = 'OCR : en attente…';
+  fileOcr = fileOcr.then(async () => {
+    try {
+      resultat.md = await ocrPdf(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
+      delete resultat.fichier;
+      li.className = 'journal-item ok';
+      icone.textContent = '✅';
+      msg.textContent = `Texte reconnu par OCR → ${resultat.nomMd} (à relire)`;
+      bouton.remove();
+    } catch (err) {
+      li.className = 'journal-item warn';
+      icone.textContent = '⚠️';
+      msg.textContent = `OCR impossible : ${err.message}`;
+      bouton.disabled = false;
+    }
+  });
+  return fileOcr;
 }
 
 // .txt → Markdown
@@ -1565,14 +1700,16 @@ async function traiterUnFichier(fichier) {
     // Détecter alerte scan PDF
     const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
     const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
 
     const avecImages = images.length ? ` (+ ${images.length} image${images.length > 1 ? 's' : ''})` : '';
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${sortie.nomMd}${avecImages}`,
+      msg:      estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
       resultat,
+      proposerOcr: estScan,
       cliquable: true,
     });
   } catch (err) {
@@ -1703,7 +1840,7 @@ function ajouterLigne({ id, icone, nom, statut, msg, cliquable }) {
   journalListe.appendChild(li);
 }
 
-function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
+function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliquable }) {
   const li = document.getElementById(id);
   if (!li) return;
 
@@ -1714,11 +1851,22 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
   const nomSpan = li.querySelector('.journal-nom');
   if (cliquable && resultat) {
     nomSpan.classList.remove('non-cliquable');
-    const { nomMd, md, images } = resultat;
+    const { nomMd, images } = resultat;
+    // resultat.md est lu au moment du clic : l'OCR peut le remplacer
+    const apercu = () => ouvrirApercu(nomMd, resultat.md);
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
     actions.className = 'journal-actions-item';
+
+    if (proposerOcr) {
+      const btnOcr = document.createElement('button');
+      btnOcr.className = 'btn btn-primaire btn-petit';
+      btnOcr.textContent = '🔍 Reconnaître le texte (OCR)';
+      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors-ligne.';
+      btnOcr.addEventListener('click', () => lancerOcr(li, resultat, btnOcr));
+      actions.appendChild(btnOcr);
+    }
 
     // Avec des images, le .md seul aurait des liens cassés : on livre une archive
     const btnDl = document.createElement('button');
@@ -1727,12 +1875,12 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
     if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
     btnDl.addEventListener('click', () => images.length
       ? genererZip([resultat], baseName(nomMd) + '.zip')
-      : telechargerBlob(md, nomMd));
+      : telechargerBlob(resultat.md, nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
     btnPrev.textContent = '👁️ Aperçu';
-    btnPrev.addEventListener('click', () => ouvrirApercu(nomMd, md));
+    btnPrev.addEventListener('click', apercu);
 
     actions.appendChild(btnDl);
     actions.appendChild(btnPrev);
@@ -1740,7 +1888,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
     li.querySelector('.journal-corps').appendChild(actions);
 
     // Clic sur le nom → aperçu
-    nomSpan.addEventListener('click', () => ouvrirApercu(nomMd, md));
+    nomSpan.addEventListener('click', apercu);
   } else {
     nomSpan.classList.add('non-cliquable');
   }

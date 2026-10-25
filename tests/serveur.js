@@ -1,9 +1,12 @@
 // Serveur statique de TEST (aucune dépendance).
 //
 //  /app/<fichier>      → fichier du dépôt ; dans index.html et sw.js, les URLs
-//                        cdnjs sont réécrites vers /__libs__/ (tests hors réseau,
-//                        mêmes versions épinglées, installées via npm).
-//  /__libs__/<chemin>  → la bibliothèque correspondante dans node_modules.
+//                        cdnjs et jsDelivr sont réécrites vers /__libs__/ et
+//                        /__npm__/ (tests hors réseau, mêmes versions épinglées,
+//                        installées via npm).
+//  /__libs__/<chemin>  → la bibliothèque cdnjs correspondante dans node_modules.
+//  /__npm__/<paquet>@<version>/<chemin> → node_modules/<paquet>/<chemin>, comme
+//                        jsDelivr, si la version installée est bien celle demandée.
 //
 // Le reste du code testé est servi octet pour octet tel qu'il est publié.
 'use strict';
@@ -15,6 +18,7 @@ const path = require('path');
 const PORT   = Number(process.env.PORT_TEST || 8899);
 const RACINE = path.resolve(__dirname, '..');
 const CDN    = 'https://cdnjs.cloudflare.com/ajax/libs';
+const NPM    = 'https://cdn.jsdelivr.net/npm';
 
 // Chemin cdnjs → fichier local (versions identiques à celles d'index.html).
 const LIBS = {
@@ -33,6 +37,8 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json',
   '.json': 'application/json',
+  '.wasm': 'application/wasm',
+  '.gz': 'application/gzip',   // servi tel quel : Tesseract décompresse lui-même
 };
 
 function envoyer(res, statut, corps, type) {
@@ -54,6 +60,18 @@ const serveur = http.createServer((req, res) => {
     return envoyer(res, 200, fs.readFileSync(path.join(RACINE, 'node_modules', cible)), TYPES['.js']);
   }
 
+  if (chemin.startsWith('/__npm__/')) {
+    const m = chemin.slice('/__npm__/'.length).match(/^((?:@[^/]+\/)?[^@/]+)@([^/]+)\/(.+)$/);
+    if (!m) return envoyer(res, 404, 'chemin npm invalide');
+    const [, paquet, version, interne] = m;
+    const dossier = path.join(RACINE, 'node_modules', paquet);
+    const installee = JSON.parse(fs.readFileSync(path.join(dossier, 'package.json'), 'utf8')).version;
+    if (installee !== version) return envoyer(res, 404, `${paquet} : ${version} demandée, ${installee} installée`);
+    const fichier = path.join(dossier, interne);
+    if (!fichier.startsWith(dossier + path.sep) || !fs.existsSync(fichier)) return envoyer(res, 404, 'introuvable');
+    return envoyer(res, 200, fs.readFileSync(fichier), TYPES[path.extname(fichier)]);
+  }
+
   if (chemin.startsWith('/app/')) {
     const relatif = chemin.slice('/app/'.length) || 'index.html';
     const fichier = path.join(RACINE, relatif);
@@ -63,7 +81,9 @@ const serveur = http.createServer((req, res) => {
     const ext = path.extname(fichier);
     let corps = fs.readFileSync(fichier);
     if (relatif === 'index.html' || relatif === 'sw.js') {
-      corps = corps.toString('utf8').split(CDN).join(`http://localhost:${PORT}/__libs__`);
+      corps = corps.toString('utf8')
+        .split(CDN).join(`http://localhost:${PORT}/__libs__`)
+        .split(NPM).join(`http://localhost:${PORT}/__npm__`);
     }
     return envoyer(res, 200, corps, TYPES[ext]);
   }

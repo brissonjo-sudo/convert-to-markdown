@@ -27,6 +27,10 @@ const PRECACHE = [
   `${CDN}/jszip/3.10.1/jszip.min.js`,
 ];
 
+// OCR : mis en cache à la volée (voir le gestionnaire fetch), pas au préchargement
+const NPM = 'https://cdn.jsdelivr.net/npm';
+const OCR_PREFIXES = [`${NPM}/tesseract.js@`, `${NPM}/tesseract.js-core@`, `${NPM}/@tesseract.js-data/`];
+
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(VERSION);
@@ -71,6 +75,13 @@ self.addEventListener('fetch', event => {
   event.respondWith((async () => {
     const enCache = await caches.match(req);
     if (enCache) return enCache;
-    return fetch(req);
+    const reponse = await fetch(req);
+    // Fichiers de l'OCR (~5 Mo, versions épinglées) : téléchargés au premier
+    // usage seulement, puis conservés pour un OCR hors-ligne.
+    if (OCR_PREFIXES.some(p => req.url.startsWith(p)) && (reponse.ok || reponse.type === 'opaque')) {
+      const cache = await caches.open(VERSION);
+      await cache.put(req, reponse.clone());
+    }
+    return reponse;
   })());
 });
