@@ -266,12 +266,12 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.eml,.png,.jpg,.jpeg,.webp"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.eml,.epub,.png,.jpg,.jpeg,.webp"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Courriels · Images (OCR)</span>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Courriels · EPUB · Images (OCR)</span>
   </div>
 
   <!-- Hors de la zone de dépôt : un clic ici n'ouvre pas le sélecteur de fichiers -->
@@ -1793,6 +1793,59 @@ async function convEml(ab, nom, ctx) {
   return { md: blocs.filter(Boolean).join('\n\n') + '\n', images: [...imagesHtml, ...fichiers] };
 }
 
+// ---- Livres numériques .epub (archive de pages XHTML) ----
+const decoderUri = s => { try { return decodeURIComponent(s); } catch { return s; } };
+
+// .epub → Markdown : chapitres dans l'ordre de lecture (spine du content.opf),
+// titres décalés d'un niveau sous celui du livre, images extraites comme pour Word
+async function convEpub(ab, nom, ctx) {
+  const zip = await JSZip.loadAsync(ab);
+  const container = zip.file('META-INF/container.xml');
+  const cheminOpf = container && attributXml(((await container.async('text')).match(/<rootfile\b[^>]*>/) || [''])[0], 'full-path');
+  const opf = cheminOpf && zip.file(cheminOpf);
+  if (!opf) throw new Error('Fichier EPUB invalide (description du livre introuvable).');
+  const racine = analyserXml(await opf.async('text'));
+  const tous = n => [...tousXml(racine, n), ...tousXml(racine, 'opf:' + n)];   // préfixe opf: des EPUB 2
+  const manifeste = new Map(tous('item').map(i => [i.attrs.id, resoudreChemin(cheminOpf, decoderUri(i.attrs.href || ''))]));
+  const ordre = tous('itemref').map(r => manifeste.get(r.attrs.idref)).filter(c => c && zip.file(c));
+  if (!ordre.length) throw new Error('Aucun chapitre trouvé dans ce fichier EPUB.');
+
+  const td = creerTurndown(), images = [], imageParChemin = new Map(), chapitres = [];
+  for (const chemin of ordre) {
+    const doc = new DOMParser().parseFromString(await zip.file(chemin).async('text'), 'text/html');
+    doc.querySelectorAll('script, style').forEach(e => e.remove());
+    // Image dans un SVG (couverture) → <img>, seule forme que Turndown restitue
+    for (const im of doc.querySelectorAll('svg image')) {
+      const img = doc.createElement('img');
+      img.setAttribute('src', im.getAttribute('xlink:href') || im.getAttribute('href') || '');
+      im.closest('svg').replaceWith(img);
+    }
+    for (const img of doc.querySelectorAll('img[src]')) {
+      const src = img.getAttribute('src');
+      if (/^[a-z][a-z0-9+.-]*:/i.test(src)) continue;   // adresse externe : laissée telle quelle
+      const cible = resoudreChemin(chemin, decoderUri(src.split('#')[0]));
+      const f = zip.file(cible);
+      if (!f) { img.remove(); continue; }
+      if (!imageParChemin.has(cible)) {
+        const ext = (cible.split('.').pop() || 'bin').toLowerCase();
+        const c = `${ctx.dossierImages}/image${images.length + 1}.${ext}`;
+        images.push({ chemin: c, type: TYPES_IMAGE[ext] || '', data: await f.async('arraybuffer') });
+        imageParChemin.set(cible, c);
+      }
+      img.setAttribute('src', imageParChemin.get(cible));
+    }
+    // Liens vers un autre chapitre : sans cible dans le Markdown, on garde le texte
+    for (const a of doc.querySelectorAll('a[href]')) {
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(a.getAttribute('href'))) a.removeAttribute('href');
+    }
+    neutraliserLiens(doc);
+    const md = td.turndown(doc.body.innerHTML).trim().replace(/^(#{1,5}) /gm, '#$1 ');
+    if (md) chapitres.push(md);
+  }
+  const titre = premierXml(racine, 'dc:title');
+  return { md: [`# ${echapperMd((titre && texteXml(titre).trim()) || baseName(nom))}`, ...chapitres].join('\n\n') + '\n', images };
+}
+
 // =====================================================================
 // SECTION 3bis : WEB WORKER (conversions lourdes hors du fil principal)
 // Les gros tableurs / CSV / PPTX bloquaient l'interface pendant le parsing.
@@ -2369,6 +2422,7 @@ function verifierBibliotheques() {
     CONVERTISSEURS['.html'] = convHtml;
     CONVERTISSEURS['.htm']  = convHtml;
     CONVERTISSEURS['.eml']  = convEml;
+    if (window.JSZip) CONVERTISSEURS['.epub'] = convEpub;
   }
 }
 
