@@ -7,10 +7,13 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@tesseract.js-data/fra": "1.0.0",
     "jszip": "3.10.1",
     "mammoth": "1.6.0",
     "papaparse": "5.4.1",
     "pdfjs-dist": "3.11.174",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "7.0.0",
     "turndown": "7.1.2",
     "xlsx": "0.18.5"
   }

@@ -45,7 +45,11 @@
     });
     objets[catalogue - 1] = `<</Type/Catalog/Pages ${arbre} 0 R>>`;
     objets[arbre - 1] = `<</Type/Pages/Kids[${enfants.map(n => n + ' 0 R').join(' ')}]/Count ${enfants.length}>>`;
+    return serialiserPdf(nom, objets, catalogue);
+  }
 
+  // Objets PDF (chaînes où 1 caractère = 1 octet) → fichier avec table xref exacte
+  function serialiserPdf(nom, objets, catalogue) {
     let sortie = '%PDF-1.4\n';
     const positions = objets.map((o, i) => { const p = sortie.length; sortie += `${i + 1} 0 obj\n${o}\nendobj\n`; return p; });
     const xref = sortie.length;
@@ -53,6 +57,36 @@
       positions.map(p => String(p).padStart(10, '0') + ' 00000 n \n').join('') +
       `trailer\n<</Size ${objets.length + 1}/Root ${catalogue} 0 R>>\nstartxref\n${xref}\n%%EOF`;
     return new File([Uint8Array.from(sortie, c => c.charCodeAt(0) & 0xFF)], nom);
+  }
+
+  // PDF « scanné » : chaque page n'est qu'une image JPEG de son texte (A4 à
+  // 150 ppp), sans aucun texte extractible — comme une numérisation.
+  // pages : [['ligne 1', 'ligne 2', …], …] ; une ligne '' laisse un blanc
+  async function pdfScanne(nom, pages) {
+    const objets = [];
+    const ajouter = contenu => { objets.push(contenu); return objets.length; };
+    const catalogue = ajouter(null);
+    const arbre     = ajouter(null);
+    const enfants = [];
+    for (const lignes of pages) {
+      const c = Object.assign(document.createElement('canvas'), { width: 1240, height: 1754 });
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.fillStyle = '#000'; g.font = '44px sans-serif'; g.textBaseline = 'top';
+      lignes.forEach((t, i) => g.fillText(t, 120, 160 + i * 80));
+      const jpeg = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92))).arrayBuffer());
+      let octets = '';
+      for (const o of jpeg) octets += String.fromCharCode(o);
+      const image = ajouter(`<</Type/XObject/Subtype/Image/Width ${c.width}/Height ${c.height}/ColorSpace/DeviceRGB` +
+        `/BitsPerComponent 8/Filter/DCTDecode/Length ${jpeg.length}>>\nstream\n${octets}\nendstream`);
+      const flux = 'q 595 0 0 842 0 0 cm /Im1 Do Q';
+      const contenu = ajouter(`<</Length ${flux.length}>>\nstream\n${flux}\nendstream`);
+      enfants.push(ajouter(`<</Type/Page/Parent ${arbre} 0 R/MediaBox[0 0 595 842]/Contents ${contenu} 0 R` +
+        `/Resources<</XObject<</Im1 ${image} 0 R>>>>>>`));
+    }
+    objets[catalogue - 1] = `<</Type/Catalog/Pages ${arbre} 0 R>>`;
+    objets[arbre - 1] = `<</Type/Pages/Kids[${enfants.map(n => n + ' 0 R').join(' ')}]/Count ${enfants.length}>>`;
+    return serialiserPdf(nom, objets, catalogue);
   }
 
   // ---------------------------------------------------------------- XLSX
@@ -157,10 +191,33 @@
     return new File([await zip.generateAsync({ type: 'arraybuffer' })], nom);
   }
 
+  // ---------------------------------------------------------------- OpenDocument
+  const ODF_NS = ['office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"', 'style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"',
+    'text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"', 'table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"',
+    'draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"', 'fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"',
+    'xlink="http://www.w3.org/1999/xlink"', 'svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"',
+    'presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"'].map(n => 'xmlns:' + n).join(' ');
+
+  // corps : XML placé dans office:text (odt) ou office:presentation (odp)
+  // styles : styles automatiques ; images : { 'Pictures/x.png': base64 }
+  async function odf(nom, type, corps, { styles = '', images = {} } = {}) {
+    const zip = new JSZip();
+    zip.file('mimetype', `application/vnd.oasis.opendocument.${type}`);
+    const conteneur = type === 'text' ? 'office:text' : 'office:presentation';
+    zip.file('content.xml', `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${ODF_NS} office:version="1.3">` +
+      `<office:automatic-styles>${styles}</office:automatic-styles><office:body><${conteneur}>${corps}</${conteneur}>` +
+      `</office:body></office:document-content>`);
+    for (const [chemin, b64] of Object.entries(images)) zip.file(chemin, b64VersOctets(b64));
+    return new File([await zip.generateAsync({ type: 'arraybuffer' })], nom);
+  }
+  const odt = (nom, corps, options) => odf(nom, 'text', corps, options);
+  const odp = (nom, corps, options) => odf(nom, 'presentation', corps, options);
+
   window.Fab = {
-    PNG_B64, texte, pdf, classeur,
+    PNG_B64, texte, pdf, pdfScanne, classeur,
     docx, docxPara, docxImage,
     pptx, pptxTitre, pptxCorps, pptxZone, pptxTableau, pptxImage,
+    odt, odp,
   };
 
   // Résumé de l'état de l'application après conversion (journal + résultats).

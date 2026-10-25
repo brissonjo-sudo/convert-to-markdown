@@ -2,6 +2,18 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <!-- Confidentialité imposée par le navigateur, et non seulement promise :
+       - connect-src : la page ne peut se connecter qu'à elle-même et aux deux CDN
+         (en lecture seule) qui servent les bibliothèques ; aucun envoi de vos
+         fichiers vers un autre serveur n'est possible, même par une bibliothèque
+         compromise ;
+       - img-src, form-action, base-uri, object-src : autres voies de fuite fermées ;
+       - script-src : 'unsafe-inline' pour le code de cette page, 'wasm-unsafe-eval'
+         pour le moteur OCR (WebAssembly), blob: pour les scripts vérifiés (SRI)
+         exécutés dans les workers.
+       Chaque bibliothèque est en outre vérifiée par son empreinte (SRI, voir
+       INTEGRITE) : un fichier modifié sur le CDN est refusé. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📄 ➜ 📝 Convertisseur Markdown</title>
 
@@ -11,35 +23,19 @@
   <link rel="apple-touch-icon" href="icone.svg">
   <meta name="theme-color" content="#2563eb">
 
-  <!-- CDN cdnjs.cloudflare.com — versions épinglées
-       SÉCURITÉ : Pour activer la vérification d'intégrité SRI, obtenez les hashes sur
-       https://www.srihash.org/ ou https://cdnjs.com (page de chaque lib) et ajoutez :
-         integrity="sha384-<HASH>" crossorigin="anonymous"
-       Exemple :
-         <script src="..." integrity="sha384-xxxx" crossorigin="anonymous"></script>
-  -->
+  <!-- Bibliothèques : cdnjs.cloudflare.com, versions épinglées, empreinte SRI
+       vérifiée par le navigateur (un attribut integrity par ligne : la CI compare
+       chaque empreinte au fichier réellement servi par le CDN, voir
+       tests/verifier-cdn.js).
+       defer : chargement en parallèle sans bloquer le premier affichage ;
+       verifierBibliotheques() tourne sur DOMContentLoaded, déclenché après. -->
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-  <!-- defer : les bibliothèques (~1 Mo) se chargent en parallèle sans bloquer le
-       premier affichage ; verifierBibliotheques() tourne sur DOMContentLoaded,
-       qui n'est déclenché qu'après leur exécution. -->
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: mammoth introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: turndown introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: pdf.js introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: SheetJS introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: PapaParse introuvable')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
-          crossorigin="anonymous"
-          onerror="console.warn('CDN: JSZip introuvable')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" integrity="sha384-nFoSjZIoH3CCp8W639jJyQkuPHinJ2NHe7on1xvlUA7SuGfJAfvMldrsoAVm6ECz" crossorigin="anonymous" onerror="console.warn('CDN : mammoth introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js" integrity="sha384-m6AyXEhyWRg2s2wrkDV64LGkaManYgMSAjn2U+zymzSJ42WthRSjCu1AqZJhoQV0" crossorigin="anonymous" onerror="console.warn('CDN : Turndown introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" onerror="console.warn('CDN : PDF.js introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous" onerror="console.warn('CDN : PapaParse introuvable ou altéré')"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous" onerror="console.warn('CDN : JSZip introuvable ou altéré')"></script>
 
   <style>
     :root {
@@ -234,12 +230,12 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.txt,.html,.htm"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span></p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · HTML · TXT</span>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT</span>
   </div>
 
   <!-- Section journal -->
@@ -284,6 +280,17 @@
      JSZip / TextDecoder existent dans les deux contextes. -->
 <script id="code-partage">
 'use strict';
+
+// Télécharge un script en vérifiant son empreinte (SRI, table INTEGRITE) et
+// renvoie une URL blob: à exécuter (importScripts, Worker). Un fichier modifié sur
+// le CDN, ou sans empreinte connue, est refusé : rien ne s'exécute sans vérification.
+async function scriptVerifie(url) {
+  const integrity = INTEGRITE[url];
+  if (!integrity) throw new Error('aucune empreinte connue pour ' + url);
+  const rep = await fetch(url, { integrity, mode: 'cors', credentials: 'omit' });
+  if (!rep.ok) throw new Error(`${url} : erreur HTTP ${rep.status}`);
+  return URL.createObjectURL(new Blob([await rep.blob()], { type: 'text/javascript' }));
+}
 
 const extOf    = nom => (nom.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 const baseName = nom => nom.replace(/\.[^.]+$/, '');
@@ -395,24 +402,30 @@ function texteCellule(cell) {
   return cell.v == null ? '' : String(cell.v);
 }
 
-// Lignes d'une feuille, en ignorant les lignes et colonnes vides en fin de plage
-// (souvent étendue par une simple mise en forme).
+// Retire les lignes et colonnes vides en fin de grille : la plage d'un tableur
+// (ou les cellules répétées d'un tableau OpenDocument) déborde souvent du contenu
+// réel, étendue par une simple mise en forme.
+function rognerGrille(lignes) {
+  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
+  const largeur = lignes.reduce((m, l) => {
+    let i = l.length - 1;
+    while (i >= 0 && l[i] === '') i--;
+    return Math.max(m, i + 1);
+  }, 0);
+  return lignes.map(l => l.slice(0, largeur));
+}
+
+// Lignes d'une feuille de tableur
 function lignesFeuille(ws) {
   if (!ws || !ws['!ref']) return [];
   const plage  = XLSX.utils.decode_range(ws['!ref']);
   const lignes = [];
-  let derniereCol = -1;
   for (let r = plage.s.r; r <= plage.e.r; r++) {
     const ligne = [];
-    for (let c = plage.s.c; c <= plage.e.c; c++) {
-      const v = texteCellule(ws[XLSX.utils.encode_cell({ r, c })]);
-      if (v !== '' && c - plage.s.c > derniereCol) derniereCol = c - plage.s.c;
-      ligne.push(v);
-    }
+    for (let c = plage.s.c; c <= plage.e.c; c++) ligne.push(texteCellule(ws[XLSX.utils.encode_cell({ r, c })]));
     lignes.push(ligne);
   }
-  while (lignes.length && lignes[lignes.length - 1].every(v => v === '')) lignes.pop();
-  return lignes.map(l => l.slice(0, derniereCol + 1));
+  return rognerGrille(lignes);
 }
 
 // .xlsx / .xls / .ods → Markdown (SheetJS)
@@ -608,6 +621,317 @@ async function convPptx(ab, nom, ctx) {
 
   return { md: blocs.join('\n\n') + '\n', images };
 }
+
+// ---- OpenDocument (.odt / .odp, LibreOffice) ----
+
+// Mini-analyseur XML : le worker n'a pas DOMParser. Produit un arbre
+// { nom, attrs, enfants } (les textes sont des chaînes), suffisant pour le XML
+// bien formé et sans DTD des suites bureautiques.
+function analyserXml(xml) {
+  const racine = { nom: '', attrs: {}, enfants: [] };
+  const pile = [racine];
+  const jeton = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<[?!][\s\S]*?>|<(\/?)([\w.:-]+)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
+  for (const m of xml.matchAll(jeton)) {
+    const parent = pile[pile.length - 1];
+    if (m[1] !== undefined) parent.enfants.push(m[1]);
+    else if (m[6] !== undefined) parent.enfants.push(desescaperXml(m[6]));
+    else if (m[3] !== undefined) {
+      if (m[2]) { if (pile.length > 1) pile.pop(); continue; }
+      const attrs = {};
+      for (const a of m[4].matchAll(/([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1]] = desescaperXml(a[2] ?? a[3]);
+      const noeud = { nom: m[3], attrs, enfants: [] };
+      parent.enfants.push(noeud);
+      if (!m[5]) pile.push(noeud);
+    }
+  }
+  return racine;
+}
+
+const enfantsXml = (n, nom) => n.enfants.filter(e => typeof e !== 'string' && (!nom || e.nom === nom));
+const texteXml   = n => typeof n === 'string' ? n : n.enfants.map(texteXml).join('');
+
+function premierXml(n, nom) {
+  for (const e of n.enfants) {
+    if (typeof e === 'string') continue;
+    if (e.nom === nom) return e;
+    const r = premierXml(e, nom);
+    if (r) return r;
+  }
+  return null;
+}
+
+function tousXml(n, nom, acc = []) {
+  for (const e of n.enfants) {
+    if (typeof e === 'string') continue;
+    if (e.nom === nom) acc.push(e);
+    tousXml(e, nom, acc);
+  }
+  return acc;
+}
+
+// Caractères qui seraient pris pour de la mise en forme Markdown : mêmes règles
+// que Turndown (utilisé pour Word et HTML), pour un rendu homogène.
+const ECHAPPEMENTS_MD = [[/\\/g, '\\\\'], [/\*/g, '\\*'], [/^-/g, '\\-'], [/^\+ /g, '\\+ '], [/^(=+)/g, '\\$1'],
+  [/^(#{1,6}) /g, '\\$1 '], [/`/g, '\\`'], [/^~~~/g, '\\~~~'], [/\[/g, '\\['], [/\]/g, '\\]'], [/^>/g, '\\>'],
+  [/_/g, '\\_'], [/^(\d+)\. /g, '$1\\. ']];
+const echapperMd = s => ECHAPPEMENTS_MD.reduce((t, [re, r]) => t.replace(re, r), s);
+
+// Styles utiles d'un document OpenDocument : gras / italique des styles de
+// texte, listes numérotées, pages masquées (présentations).
+function stylesOdf(racines) {
+  const texte = new Map(), listes = new Map(), pagesMasquees = new Set(), parents = new Map();
+  for (const racine of racines) {
+    for (const s of tousXml(racine, 'style:style')) {
+      const nom = s.attrs['style:name'];
+      const tp  = enfantsXml(s, 'style:text-properties')[0];
+      const pp  = enfantsXml(s, 'style:drawing-page-properties')[0];
+      const st  = {};
+      if (tp && tp.attrs['fo:font-weight']) st.gras = /^(bold|[6-9]00)$/.test(tp.attrs['fo:font-weight']);
+      if (tp && tp.attrs['fo:font-style'])  st.italique = /^(italic|oblique)$/.test(tp.attrs['fo:font-style']);
+      // Styles nommés de LibreOffice (« Strong Emphasis », « Emphasis »)
+      if (st.gras === undefined && /Strong/.test(nom)) st.gras = true;
+      if (st.italique === undefined && /^Emphasis$/.test(nom)) st.italique = true;
+      texte.set(nom, st);
+      if (s.attrs['style:parent-style-name']) parents.set(nom, s.attrs['style:parent-style-name']);
+      if (pp && pp.attrs['presentation:visibility'] === 'hidden') pagesMasquees.add(nom);
+    }
+    for (const l of tousXml(racine, 'text:list-style')) {
+      const niveaux = [];
+      for (const n of enfantsXml(l)) niveaux[Number(n.attrs['text:level'] || 1)] = n.nom === 'text:list-level-style-number';
+      listes.set(l.attrs['style:name'], niveaux);
+    }
+  }
+  // Héritage : un style sans gras/italique explicite prend ceux de son parent
+  const resoudre = (nom, vus = new Set()) => {
+    const st = texte.get(nom) || {};
+    const p = parents.get(nom);
+    if (!p || vus.has(nom)) return st;
+    vus.add(nom);
+    const sp = resoudre(p, vus);
+    return { gras: st.gras ?? sp.gras, italique: st.italique ?? sp.italique };
+  };
+  const styles = new Map([...texte.keys()].map(n => [n, resoudre(n)]));
+  return { styles, listes, pagesMasquees };
+}
+
+// Ouvre un fichier OpenDocument : arbre de content.xml, styles, images préchargées
+async function ouvrirOdf(ab, ctx) {
+  const zip = await JSZip.loadAsync(ab);
+  const fContenu = zip.file('content.xml');
+  if (!fContenu) throw new Error('Fichier OpenDocument invalide (content.xml absent).');
+  const racine = analyserXml(await fContenu.async('text'));
+  const fStyles = zip.file('styles.xml');
+  const racineStyles = fStyles ? analyserXml(await fStyles.async('text')) : null;
+
+  const c = { ...stylesOdf([racineStyles, racine].filter(Boolean)), notes: [], images: [], imageParChemin: new Map(),
+              donneesImages: new Map(), dossierImages: ctx.dossierImages };
+  const chemins = new Set(tousXml(racine, 'draw:image').map(i => i.attrs['xlink:href']).filter(h => h && !/^[a-z]+:/i.test(h)));
+  for (const h of chemins) {
+    const f = zip.file(h.replace(/^\.\//, ''));
+    if (f) c.donneesImages.set(h, await f.async('arraybuffer'));
+  }
+  return { racine, c };
+}
+
+function imageOdf(cadre, c) {
+  // Aperçu d'un objet incorporé (graphique, formule) : pas une vraie image
+  if (premierXml(cadre, 'draw:object') || premierXml(cadre, 'draw:object-ole')) return '';
+  const img = premierXml(cadre, 'draw:image');
+  if (!img) return '';
+  const href  = img.attrs['xlink:href'] || '';
+  const titre = premierXml(cadre, 'svg:title') || premierXml(cadre, 'svg:desc');
+  const alt   = (titre ? texteXml(titre) : '').replace(/[[\]\s]+/g, ' ').trim();
+  if (/^[a-z]+:/i.test(href)) return `![${alt}](${href})`;
+  const data = c.donneesImages.get(href);
+  if (!data) return '';
+  if (!c.imageParChemin.has(href)) {
+    const ext = (href.split('.').pop() || 'bin').toLowerCase();
+    const chemin = `${c.dossierImages}/image${c.images.length + 1}.${ext}`;
+    c.images.push({ chemin, type: TYPES_IMAGE[ext] || '', data });
+    c.imageParChemin.set(href, chemin);
+  }
+  return `![${alt}](${c.imageParChemin.get(href)})`;
+}
+
+// Entoure de ** ou * sans englober les espaces de bord (« **mot** » et non « ** mot** »)
+function encadrerMd(t, { gras, italique } = {}) {
+  const marque = gras && italique ? '***' : gras ? '**' : italique ? '*' : '';
+  const m = t.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return marque && m[2] ? m[1] + marque + m[2] + marque + m[3] : t;
+}
+
+// Contenu en ligne d'un paragraphe OpenDocument → Markdown
+function enLigneOdf(n, c) {
+  return n.enfants.map(e => {
+    if (typeof e === 'string') return echapperMd(e.replace(/\s+/g, ' '));
+    switch (e.nom) {
+      case 'text:s':          return ' '.repeat(Math.min(Number(e.attrs['text:c'] || 1), 100));
+      case 'text:tab':        return ' ';
+      case 'text:line-break': return '\n';
+      case 'text:span':       return encadrerMd(enLigneOdf(e, c), c.styles.get(e.attrs['text:style-name']));
+      case 'text:a': {
+        const t = enLigneOdf(e, c), href = e.attrs['xlink:href'];
+        return href && t.trim() ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
+      }
+      case 'text:note': {   // note de bas de page → note Markdown [^n]
+        const corps = premierXml(e, 'text:note-body');
+        c.notes.push(corps ? blocsOdf(corps, c).join(' ').replace(/\s*\n\s*/g, ' ') : '');
+        return `[^${c.notes.length}]`;
+      }
+      case 'draw:frame': {
+        const boite = enfantsXml(e, 'draw:text-box')[0];
+        return boite ? blocsOdf(boite, c).join(' ') : imageOdf(e, c);
+      }
+      // Commentaires, repères, changements suivis : pas du texte du document
+      case 'office:annotation': case 'office:annotation-end': case 'text:bookmark': case 'text:bookmark-start':
+      case 'text:bookmark-end': case 'text:soft-page-break': case 'text:change-start': case 'text:change-end':
+        return '';
+      default: return enLigneOdf(e, c);   // champs (date, numéro de page…), text:sequence, etc.
+    }
+  }).join('');
+}
+
+// Liste OpenDocument → lignes Markdown (puces ou numéros, niveaux imbriqués)
+function listeOdf(liste, c, niveau = 1, retrait = '', styleHerite) {
+  const style = liste.attrs['text:style-name'] || styleHerite;
+  const ordonnee = (c.listes.get(style) || [])[niveau] === true;
+  const lignes = [];
+  let numero = 0;
+  for (const item of enfantsXml(liste)) {
+    if (item.nom !== 'text:list-item' && item.nom !== 'text:list-header') continue;
+    const marque = item.nom === 'text:list-header' ? '' : ordonnee ? `${++numero}. ` : '- ';
+    let premier = true;
+    for (const e of enfantsXml(item)) {
+      if (e.nom === 'text:list') {
+        lignes.push(listeOdf(e, c, niveau + 1, retrait + ' '.repeat(Math.max(marque.length, 2)), style));
+      } else if (e.nom === 'text:p' || e.nom === 'text:h') {
+        const t = enLigneOdf(e, c).replace(/\s*\n\s*/g, ' ').trim();
+        if (!t) continue;
+        lignes.push(retrait + (premier ? marque : ' '.repeat(marque.length)) + t);
+        premier = false;
+      }
+    }
+  }
+  return lignes.filter(Boolean).join('\n');
+}
+
+// Tableau OpenDocument → tableau Markdown. Les cellules fusionnées sont suivies de
+// cellules « couvertes » : la grille est déjà alignée, aucune colonne ne se perd.
+function tableauOdf(table, c) {
+  const lignes = [];
+  const parcourir = n => {
+    for (const e of enfantsXml(n)) {
+      if (e.nom === 'table:table-row') {
+        const ligne = [];
+        for (const cell of enfantsXml(e)) {
+          if (cell.nom !== 'table:table-cell' && cell.nom !== 'table:covered-table-cell') continue;
+          const v = cell.nom === 'table:covered-table-cell' ? '' : blocsOdf(cell, c).join('\n');
+          const rep = Math.min(Number(cell.attrs['table:number-columns-repeated'] || 1), 1000);
+          for (let k = 0; k < rep; k++) ligne.push(v);
+        }
+        const rep = Math.min(Number(e.attrs['table:number-rows-repeated'] || 1), 1000);
+        for (let k = 0; k < rep; k++) lignes.push(ligne);
+      } else if (/^table:table-(header-rows|rows|row-group)$/.test(e.nom)) {
+        parcourir(e);
+      }
+    }
+  };
+  parcourir(table);
+  const grille = rognerGrille(lignes);
+  return grille.length ? construireTableMd(grille) : '';
+}
+
+// Blocs (titres, paragraphes, listes, tableaux) d'un conteneur OpenDocument
+function blocsOdf(n, c) {
+  const blocs = [];
+  let listePrec = null;   // type de la liste qui vient d'être ajoutée (null si autre bloc)
+  for (const e of enfantsXml(n)) {
+    if (e.nom === 'text:list') {
+      // LibreOffice découpe souvent une même liste en plusieurs <text:list>
+      // consécutives (un niveau d'imbrication par liste) : on les recolle.
+      const l = listeOdf(e, c);
+      const ordonnee = (c.listes.get(e.attrs['text:style-name']) || [])[1] === true;
+      if (l && listePrec === ordonnee) blocs[blocs.length - 1] += '\n' + l;
+      else if (l) blocs.push(l);
+      if (l) listePrec = ordonnee;
+      continue;
+    }
+    const avant = blocs.length;
+    switch (e.nom) {
+      case 'text:h': {
+        const t = enLigneOdf(e, c).replace(/\s*\n\s*/g, ' ').trim();
+        if (t) blocs.push('#'.repeat(Math.min(Math.max(Number(e.attrs['text:outline-level'] || 1), 1), 6)) + ' ' + t);
+        break;
+      }
+      case 'text:p': {
+        const t = enLigneOdf(e, c).trim();
+        if (t) blocs.push(t);
+        break;
+      }
+      case 'table:table': { const t = tableauOdf(e, c); if (t) blocs.push(t); break; }
+      // Tables des matières et index (redondants), suivi des modifications (texte supprimé)
+      case 'text:table-of-content': case 'text:alphabetical-index': case 'text:illustration-index':
+      case 'text:table-index': case 'text:object-index': case 'text:user-index': case 'text:bibliography':
+      case 'text:tracked-changes': case 'office:forms': case 'text:sequence-decls': case 'text:variable-decls':
+        break;
+      default: blocs.push(...blocsOdf(e, c));   // sections, zones de texte…
+    }
+    if (blocs.length !== avant) listePrec = null;
+  }
+  return blocs;
+}
+
+// .odt (LibreOffice Writer) → Markdown
+async function convOdt(ab, nom, ctx) {
+  const { racine, c } = await ouvrirOdf(ab, ctx);
+  const corps = premierXml(racine, 'office:text');
+  if (!corps) throw new Error('Aucun texte trouvé dans ce fichier ODT.');
+  const blocs = blocsOdf(corps, c);
+  if (c.notes.length) blocs.push(c.notes.map((t, i) => `[^${i + 1}]: ${t}`).join('\n'));
+  return { md: (blocs.join('\n\n') || '_(document vide)_') + '\n', images: c.images };
+}
+
+// .odp (LibreOffice Impress) → Markdown
+async function convOdp(ab, nom, ctx) {
+  const { racine, c } = await ouvrirOdf(ab, ctx);
+  const pres = premierXml(racine, 'office:presentation');
+  const pages = pres ? enfantsXml(pres, 'draw:page') : [];
+  if (!pages.length) throw new Error('Aucune diapositive trouvée dans ce fichier ODP.');
+  const IGNOREES = new Set(['page-number', 'footer', 'date-time', 'header']);
+  const blocs = [`# ${baseName(nom)}`];
+
+  pages.forEach((page, i) => {
+    let titre = null;
+    const contenu = [];
+    // Formes dans l'ordre du document, groupes compris
+    const formes = n => enfantsXml(n).flatMap(e => e.nom === 'draw:g' ? formes(e) : e.nom === 'presentation:notes' ? [] : [e]);
+    for (const forme of formes(page)) {
+      const classe = forme.attrs['presentation:class'];
+      if (IGNOREES.has(classe)) continue;
+      const boite = enfantsXml(forme, 'draw:text-box')[0];
+      if (classe === 'title') {
+        const t = texteXml(forme).replace(/\s+/g, ' ').trim();
+        if (t && titre === null) { titre = t; continue; }
+      }
+      const table = premierXml(forme, 'table:table');
+      if (table) { const t = tableauOdf(table, c); if (t) contenu.push(t); }
+      else if (boite) contenu.push(...blocsOdf(boite, c));
+      else if (forme.nom === 'draw:frame') { const img = imageOdf(forme, c); if (img) contenu.push(img); }
+      else contenu.push(...blocsOdf(forme, c));   // formes dessinées contenant du texte
+    }
+
+    const notesPage = enfantsXml(page, 'presentation:notes')[0];
+    const notes = notesPage
+      ? tousXml(notesPage, 'draw:frame').filter(f => f.attrs['presentation:class'] === 'notes').flatMap(f => blocsOdf(f, c))
+      : [];
+    if (notes.length) contenu.push('> **Notes de l\'orateur :** ' + notes.join('\n>\n> '));
+
+    const masquee = c.pagesMasquees.has(page.attrs['draw:style-name']) ? ' *(masquée)*' : '';
+    blocs.push(`## Diapositive ${i + 1}${titre ? ' : ' + titre : ''}${masquee}`, ...contenu);
+  });
+
+  return { md: blocs.join('\n\n') + '\n', images: c.images };
+}
 </script>
 
 <script>
@@ -617,6 +941,21 @@ async function convPptx(ab, nom, ctx) {
 // SECTION 1 : CONFIG
 // =====================================================================
 const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// Empreintes (SRI) des scripts chargés hors balise <script> : worker PDF.js,
+// bibliothèques du worker de conversion, moteur OCR. Rien ne s'exécute sans
+// correspondre à son empreinte (voir scriptVerifie). Une ligne par fichier :
+// format lu par tests/verifier-cdn.js (CI) et tests/serveur.js.
+const INTEGRITE = {
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js': 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js': 'sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw',
+  'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js': 'sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs',
+  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js': 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js': 'sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js': 'sha384-iUyp1FxLBc4DYaSwxT1/G6elMdSh3vvQffNSmMiySoXDpk2XfS9ZcM4RjPSiqiw3',
+  'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js': 'sha384-1PHRxr8cs/w6IDh6HZYHEHS+Li9cfjahWYKnioD1xvjs7wZD20qpwhD2+ZvhDmHU',
+  'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-lstm.wasm.js': 'sha384-ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA',
+};
 const SEUIL_ALERTE_TAILLE = 50 * 1024 * 1024; // 50 Mo
 const SEUIL_PDF_SCAN = 20;                     // moins de 20 caractères = scan probable
 const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultanément
@@ -625,8 +964,6 @@ const CONVERSIONS_MAX_PARALLELES = 4;          // fichiers convertis simultaném
 const FORMATS_REFUSES = {
   '.doc': 'Format Word ancien (.doc) non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
   '.ppt': 'Format PowerPoint ancien (.ppt) non pris en charge. Ouvrez dans PowerPoint et enregistrez en .pptx, puis recommencez.',
-  '.odt': 'Format OpenDocument texte. Ouvrez dans LibreOffice Writer et enregistrez en .docx, puis recommencez.',
-  '.odp': 'Format OpenDocument présentation. Ouvrez dans LibreOffice Impress et enregistrez en .pptx, puis recommencez.',
   '.rtf': 'Format RTF non pris en charge. Ouvrez dans Word et enregistrez en .docx, puis recommencez.',
 };
 
@@ -703,30 +1040,62 @@ function telechargerBlob(contenu, nom) {
 let turndownPartage = null;
 function creerTurndown() {
   if (turndownPartage) return turndownPartage;
-  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
+  // emDelimiter '*' : même italique que pour les autres formats (et « _ » colle mal dans un mot)
+  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced', emDelimiter: '*' });
 
-  // Cellules
-  td.addRule('tableCell', {
-    filter: ['th', 'td'],
-    replacement: content => ' ' + content.trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ') + ' |'
+  // Tableaux : reconstruits depuis le DOM (voir grilleTableau). Le contenu déjà
+  // converti des lignes et cellules est ignoré, d'où une sortie vide pour elles.
+  td.addRule('tableInterne', { filter: ['thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption'], replacement: () => '' });
+  td.addRule('table', {
+    filter: 'table',
+    replacement: (_, table) => {
+      const grille = grilleTableau(table, cellule => texteCelluleHtml(td, cellule));
+      if (!grille.length) return '';
+      const legende = table.caption && table.caption.textContent.trim();
+      return '\n\n' + (legende ? `**${td.escape(legende)}**\n\n` : '') + construireTableMd(grille) + '\n\n';
+    },
   });
-  // Lignes
-  td.addRule('tableRow', {
-    filter: 'tr',
-    replacement: (content, node) => {
-      const isHeader = node.parentNode.nodeName === 'THEAD' || node.rowIndex === 0;
-      let row = '|' + content + '\n';
-      if (isHeader) row += '|' + Array.from(node.cells).map(() => ' --- ').join('|') + '|\n';
-      return row;
-    }
-  });
-  // Sections de tableau
-  td.addRule('tableSection', { filter: ['thead', 'tbody', 'tfoot'], replacement: c => c });
-  // Tableau global
-  td.addRule('table', { filter: 'table', replacement: c => '\n\n' + c.trim() + '\n\n' });
 
   turndownPartage = td;
   return td;
+}
+
+// Contenu Markdown d'une cellule, sur une ligne. Raccourci pour le cas courant
+// (texte seul, éventuellement dans des <p>) : éviter un appel complet à Turndown
+// par cellule, coûteux sur les grands tableaux.
+function texteCelluleHtml(td, cellule) {
+  const brut = cellule.querySelector(':scope *:not(p)') === null;
+  const md = brut
+    ? [...cellule.querySelectorAll(':scope > p')].map(p => p.textContent).join(' ') || cellule.textContent
+    : td.turndown(cellule.innerHTML);
+  return (brut ? td.escape(md) : md).replace(/\s*\n+\s*/g, ' ').trim();
+}
+
+// Grille réelle d'un tableau HTML : une cellule fusionnée (colspan / rowspan)
+// occupe toutes ses places, sa valeur dans la première et des cases vides
+// ailleurs. Sans cela, une première ligne fusionnée (« Budget 2026 » sur deux
+// colonnes) déclarait un tableau d'une colonne, et le Markdown ignorait
+// silencieusement les colonnes suivantes à l'affichage.
+function grilleTableau(table, texte) {
+  const grille = [];
+  [...table.rows].forEach((tr, r) => {
+    grille[r] = grille[r] || [];
+    let c = 0;
+    for (const cellule of tr.cells) {
+      while (grille[r][c] !== undefined) c++;   // places prises par un rowspan au-dessus
+      const largeur = Math.min(Math.max(cellule.colSpan || 1, 1), 100);
+      const hauteur = Math.min(Math.max(cellule.rowSpan || 1, 1), 1000);
+      const valeur  = texte(cellule);
+      for (let dr = 0; dr < hauteur; dr++) {
+        const ligne = grille[r + dr] = grille[r + dr] || [];
+        for (let dc = 0; dc < largeur; dc++) ligne[c + dc] = dr === 0 && dc === 0 ? valeur : '';
+      }
+      c += largeur;
+    }
+  });
+  // Un rowspan qui déborde du tableau ne doit pas créer de lignes fantômes
+  grille.length = Math.min(grille.length, table.rows.length);
+  return grille.map(l => Array.from({ length: l.length }, (_, i) => l[i] ?? ''));
 }
 
 // .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
@@ -743,7 +1112,34 @@ async function convDocx(ab, nom, ctx) {
       return image.readAsArrayBuffer().then(data => { entree.data = data; return { src: entree.chemin }; });
     }),
   });
-  return { md: creerTurndown().turndown(res.value), images };
+  return { md: notesWordEnMarkdown(res.value, creerTurndown()), images };
+}
+
+// Notes de bas de page et de fin : mammoth produit des liens internes ([1] vers
+// #footnote-…, ↑ en retour) qui ne mènent nulle part en Markdown. On en fait des
+// notes Markdown natives ([^1] … [^1]: texte), comme pour les fichiers .odt.
+function notesWordEnMarkdown(html, td) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const numeros = new Map();   // id de la note → numéro d'affichage
+  for (const a of doc.querySelectorAll('a[href^="#footnote-"], a[href^="#endnote-"]')) {
+    const id = a.getAttribute('href').slice(1);
+    if (/-ref-/.test(id)) continue;   // lien de retour ↑, traité avec la note
+    if (!numeros.has(id)) numeros.set(id, numeros.size + 1);
+    // Marqueur hors de portée de l'échappement de Turndown, remplacé ensuite
+    (a.closest('sup') || a).replaceWith(`\uE000${numeros.get(id)}\uE001`);
+  }
+  const notes = [];
+  for (const [id, n] of numeros) {
+    const li = doc.getElementById(id);
+    if (!li) continue;
+    li.querySelectorAll('a[href*="-ref-"]').forEach(a => a.remove());
+    notes.push(`[^${n}]: ${td.turndown(li.innerHTML).replace(/\s*\n+\s*/g, ' ').trim()}`);
+    const liste = li.parentElement;
+    li.remove();
+    if (liste && liste.tagName === 'OL' && !liste.children.length) liste.remove();
+  }
+  const md = td.turndown(doc.body.innerHTML).replace(/\uE000(\d+)\uE001/g, '[^$1]');
+  return notes.length ? md + '\n\n' + notes.join('\n') : md;
 }
 
 // ---- PDF : reconstruction de la structure ----
@@ -833,13 +1229,24 @@ const LETTRE_PDF = /^[a-z][)]\s/i;                                // a) : nouvea
 const joindrePdf = (a, b) => /\p{L}-$/u.test(a) && /^\p{Ll}/u.test(b) ? a + b : a + ' ' + b;
 
 // Lignes d'une page → blocs Markdown (titres, paragraphes, listes)
-function blocsPage(p, corps, niveaux) {
-  const lignes = p.lignes;
-  // Interligne habituel : médiane des écarts entre lignes consécutives
+// Interligne habituel du document, sur toutes les pages (une page de deux lignes
+// n'en dit rien à elle seule). Premier quartile des écarts entre lignes
+// consécutives, et non la médiane : dans un document court, les blancs entre
+// paragraphes peuvent être aussi nombreux que les interlignes ordinaires.
+function interligneDocument(pages, corps) {
   const ecarts = [];
-  for (let i = 1; i < lignes.length; i++) { const e = lignes[i - 1].y - lignes[i].y; if (e > 0) ecarts.push(e); }
+  for (const p of pages) {
+    for (let i = 1; i < p.lignes.length; i++) {
+      const e = p.lignes[i - 1].y - p.lignes[i].y;
+      if (e > corps * 0.5) ecarts.push(e);
+    }
+  }
   ecarts.sort((a, b) => a - b);
-  const interligne = ecarts.length ? ecarts[Math.floor(ecarts.length / 2)] : corps * 1.2;
+  return ecarts.length ? ecarts[Math.floor(ecarts.length / 4)] : corps * 1.2;
+}
+
+function blocsPage(p, corps, niveaux, interligne) {
+  const lignes = p.lignes;
   // Bord droit du texte : une ligne qui s'arrête nettement avant est un retour
   // à la ligne voulu (adresse, signature), conservé tel quel.
   const bordDroit = lignes.reduce((m, l) => Math.max(m, l.fin), 0);
@@ -859,7 +1266,10 @@ function blocsPage(p, corps, niveaux) {
   for (const l of lignes) {
     const prec   = bloc && bloc.derniere;
     const ecart  = prec ? prec.y - l.y : 0;
-    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15;
+    // Rupture : grand blanc, changement de taille, retour vers le haut (nouvelle
+    // colonne) ou changement de bloc détecté par l'OCR
+    const rupture = !prec || ecart > interligne * 1.5 || Math.abs(l.taille - prec.taille) > corps * 0.15 ||
+      ecart < -corps * 0.5 || l.bloc !== prec.bloc;
     const niveau = estTitrePdf(l, corps) && niveaux.get(taillePdf(l.taille));
 
     if (niveau) {
@@ -895,9 +1305,40 @@ function blocsPage(p, corps, niveaux) {
   return blocs;
 }
 
+// Pages ({ lignes, haut, bas, hauteur }) → blocs Markdown : en-têtes et pieds
+// répétés retirés, titres déduits des tailles, repères de page discrets (hors
+// plan du document) pour pouvoir citer une page. Partagé par les PDF texte et l'OCR.
+function blocsPages(pages) {
+  retirerEntetesPieds(pages);
+  const corps   = tailleCorps(pages);
+  const niveaux = niveauxTitres(pages, corps);
+  const interligne = interligneDocument(pages, corps);
+  const blocs = [];
+  pages.forEach((p, i) => {
+    if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
+    blocs.push(...blocsPage(p, corps, niveaux, interligne));
+  });
+  return blocs;
+}
+
+// Worker de PDF.js : téléchargé avec vérification d'empreinte puis lancé depuis une
+// URL blob: (PDF.js l'aurait sinon chargé lui-même, sans vérification)
+let workerPdfPret = null;
+function preparerPdf() {
+  if (!workerPdfPret) {
+    workerPdfPret = scriptVerifie(PDFJS_WORKER_URL)
+      .then(url => { pdfjsLib.GlobalWorkerOptions.workerSrc = url; })
+      .catch(err => { workerPdfPret = null; throw new Error(`composant PDF.js inaccessible ou altéré (${err.message})`); });
+  }
+  return workerPdfPret;
+}
+
+// isEvalSupported : false — PDF.js sait se passer d'eval, interdit par la CSP
+const ouvrirPdf = async ab => { await preparerPdf(); return pdfjsLib.getDocument({ data: new Uint8Array(ab), isEvalSupported: false }); };
+
 // .pdf → Markdown (PDF.js)
 async function convPdf(ab, nom) {
-  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(ab) });
+  const loadingTask = await ouvrirPdf(ab);
   const pdf  = await loadingTask.promise;
 
   try {
@@ -916,25 +1357,149 @@ async function convPdf(ab, nom) {
     // Détecter un PDF scanné
     const totalChars = pages.reduce((n, p) => n + p.lignes.reduce((m, l) => m + l.texte.length, 0), 0);
     if (totalChars < SEUIL_PDF_SCAN) {
-      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image). Aucun texte n'a pu être extrait. Un outil d'OCR est nécessaire.\n`;
+      return `# ${baseName(nom)}\n\n> ⚠️ Ce PDF semble être un scan (image) : aucun texte n'a pu être extrait. Utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.\n`;
     }
 
-    retirerEntetesPieds(pages);
-    const corps   = tailleCorps(pages);
-    const niveaux = niveauxTitres(pages, corps);
-
-    // Repères de page discrets (hors plan du document) pour pouvoir citer une page
-    const blocs = [`# ${baseName(nom)}`];
-    pages.forEach((p, i) => {
-      if (pages.length > 1) blocs.push(i === 0 ? '*Page 1*' : `---\n\n*Page ${i + 1}*`);
-      blocs.push(...blocsPage(p, corps, niveaux));
-    });
-    return blocs.join('\n\n') + '\n';
+    return [`# ${baseName(nom)}`, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     // Libérer le document côté worker : sans cela, chaque PDF converti
     // reste en mémoire jusqu'à la fermeture de l'onglet.
     loadingTask.destroy();
   }
+}
+
+// ---- OCR des PDF scannés (Tesseract.js, à la demande) ----
+// Reconnaissance faite sur l'appareil (WebAssembly) : le document ne sort pas.
+// Environ 5 Mo téléchargés au premier usage seulement (moteur, données
+// françaises), puis conservés par le navigateur et le service worker.
+const OCR = {
+  script:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js',
+  worker:  'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js',
+  coreSimd: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js',
+  core:     'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-lstm.wasm.js',
+  // Données de langue : ce ne sont pas du code (pas d'empreinte), CSP oblige
+  // elles ne peuvent venir que de ce CDN
+  langues:  'https://cdn.jsdelivr.net/npm/@tesseract.js-data/fra@1.0.0/4.0.0_best_int',
+};
+// Moteur SIMD (plus rapide) si disponible : même test que wasm-feature-detect,
+// utilisé par Tesseract pour ce choix quand il charge lui-même son moteur
+const SIMD_WASM = (() => {
+  try { return WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11])); }
+  catch { return false; }
+})();
+const OCR_LARGEUR_MAX = 3000;   // pixels : ~300 ppp pour un A4, mémoire maîtrisée
+
+let tesseractPromise = null;
+function chargerTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (!tesseractPromise) {
+    tesseractPromise = new Promise((resolve, reject) => {
+      const s = Object.assign(document.createElement('script'), { src: OCR.script, integrity: INTEGRITE[OCR.script], crossOrigin: 'anonymous' });
+      s.onload  = () => window.Tesseract ? resolve() : reject(new Error('moteur de reconnaissance invalide'));
+      s.onerror = () => {
+        tesseractPromise = null;   // nouvel essai possible au prochain clic
+        s.remove();
+        reject(new Error('téléchargement du moteur impossible ou fichier altéré (connexion internet requise la première fois)'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return tesseractPromise;
+}
+
+// Lignes reconnues → même structure que les lignes d'un PDF texte
+// ({ texte, y, x, fin, taille }) : l'OCR profite de la même reconstruction
+// (paragraphes, titres, listes, en-têtes répétés) que les PDF, plus fiable que la
+// segmentation en paragraphes de Tesseract. Ordre de lecture de Tesseract conservé
+// (colonnes) ; ses blocs servent de séparations franches. Repère image (y vers le
+// bas) → repère PDF (y vers le haut) : y = −ligne de base. Taille : hauteur de
+// rangée (police), indépendante des jambages présents dans la ligne.
+function lignesOcr(data) {
+  return (data.blocks || []).flatMap((b, bloc) => (b.paragraphs || []).flatMap(p => p.lines || []).map(l => ({
+    texte: l.text.replace(/\s+/g, ' ').trim(),
+    x: l.bbox.x0,
+    fin: l.bbox.x1,
+    y: -(l.baseline ? (l.baseline.y0 + l.baseline.y1) / 2 : l.bbox.y1),
+    taille: (l.rowAttributes && l.rowAttributes.rowHeight) || (l.bbox.y1 - l.bbox.y0),
+    bloc,
+  }))).filter(l => l.texte);
+}
+
+// Rend chaque page en image (PDF.js) puis la fait lire par Tesseract
+async function ocrPdf(fichier, nom, progression) {
+  progression('OCR : chargement du moteur de reconnaissance…');
+  await chargerTesseract();
+  const loadingTask = await ouvrirPdf(await lireCommeArrayBuffer(fichier));
+  let worker = null;
+  const blobs = [];
+  try {
+    const pdf = await loadingTask.promise;
+    blobs.push(...await Promise.all([scriptVerifie(OCR.worker), scriptVerifie(SIMD_WASM ? OCR.coreSimd : OCR.core)]));
+    worker = await Tesseract.createWorker('fra', 1, {
+      workerPath: blobs[0],
+      workerBlobURL: false,
+      // « #.wasm.js » : Tesseract n'emploie tel quel qu'un chemin finissant par
+      // « js » (sinon il le prend pour un dossier) ; le fragment est ignoré au chargement
+      corePath: blobs[1] + '#.wasm.js',
+      langPath: OCR.langues,
+    });
+    const pages = [], confiances = [];
+    const canvas = document.createElement('canvas');
+    for (let i = 1; i <= pdf.numPages; i++) {
+      progression(`OCR : page ${i} / ${pdf.numPages}…`);
+      const page = await pdf.getPage(i);
+      const largeur = page.getViewport({ scale: 1 }).width;
+      const vue = page.getViewport({ scale: Math.min(300 / 72, OCR_LARGEUR_MAX / largeur) });
+      canvas.width = Math.ceil(vue.width);
+      canvas.height = Math.ceil(vue.height);
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.fillStyle = '#fff';
+      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      const { data } = await worker.recognize(canvas, {}, { blocks: true });
+      pages.push({ lignes: lignesOcr(data), haut: 0, bas: -canvas.height, hauteur: canvas.height });
+      confiances.push(data.confidence);
+      page.cleanup();
+    }
+    canvas.width = canvas.height = 0;   // libérer la mémoire de l'image
+
+    const confiance = Math.round(confiances.reduce((s, c) => s + c, 0) / confiances.length);
+    const blocs = [`# ${baseName(nom)}`,
+      `> Texte obtenu par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.`];
+    return [...blocs, ...blocsPages(pages)].join('\n\n') + '\n';
+  } finally {
+    if (worker) await worker.terminate();
+    blobs.forEach(u => URL.revokeObjectURL(u));
+    loadingTask.destroy();
+  }
+}
+
+// Un OCR à la fois : chaque moteur occupe plusieurs centaines de Mo de mémoire
+let fileOcr = Promise.resolve();
+
+function lancerOcr(li, resultat, bouton) {
+  const msg   = li.querySelector('.journal-msg');
+  const icone = li.querySelector('.journal-icone');
+  bouton.disabled = true;
+  li.className = 'journal-item en-cours';
+  icone.textContent = '⏳';
+  msg.textContent = 'OCR : en attente…';
+  fileOcr = fileOcr.then(async () => {
+    try {
+      resultat.md = await ocrPdf(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
+      delete resultat.fichier;
+      li.className = 'journal-item ok';
+      icone.textContent = '✅';
+      msg.textContent = `Texte reconnu par OCR → ${resultat.nomMd} (à relire)`;
+      bouton.remove();
+    } catch (err) {
+      li.className = 'journal-item warn';
+      icone.textContent = '⚠️';
+      msg.textContent = `OCR impossible : ${err.message}`;
+      bouton.disabled = false;
+    }
+  });
+  return fileOcr;
 }
 
 // .txt → Markdown
@@ -976,7 +1541,7 @@ async function convHtml(ab, nom, ctx) {
 
 // Extensions routées vers le worker (les autres restent sur le fil principal :
 // .docx/.html ont besoin du DOM, .pdf a déjà son propre worker PDF.js).
-const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv', '.pptx']);
+const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv', '.pptx', '.odt', '.odp']);
 
 // URLs des libs chargées DANS le worker. Surchargables pour les tests via
 // self.__URLS_LIBS_TEST__ (page.route de Playwright n'intercepte pas les
@@ -987,15 +1552,17 @@ const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
   jszip:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
 };
 
-// Corps du worker : importe les libs (chacune isolée → disponibilité partielle
+// Corps du worker : importe les libs vérifiées (chacune isolée → disponibilité partielle
 // possible), puis répond aux requêtes {id, ext, nom, ab, ctx} par
 // {id, ok, md, images} ou {id, ok: false, erreur}.
 // La poignée de main {type:'pret', exts} annonce les extensions réellement gérées.
 const BOOTSTRAP_TRAVAILLEUR = `
 const CONVERTISSEURS_W = {};
-try { importScripts(URLS.xlsx);      CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; } catch (e) {}
-try { importScripts(URLS.papaparse); CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; } catch (e) {}
-try { importScripts(URLS.jszip);     CONVERTISSEURS_W['.pptx'] = convPptx; } catch (e) {}
+const LIBS_W = [
+  [URLS.xlsx,      () => { CONVERTISSEURS_W['.xlsx'] = CONVERTISSEURS_W['.xls'] = CONVERTISSEURS_W['.ods'] = convTableur; }],
+  [URLS.papaparse, () => { CONVERTISSEURS_W['.csv']  = CONVERTISSEURS_W['.tsv'] = convCsv; }],
+  [URLS.jszip,     () => { CONVERTISSEURS_W['.pptx'] = convPptx; CONVERTISSEURS_W['.odt'] = convOdt; CONVERTISSEURS_W['.odp'] = convOdp; }],
+];
 self.onmessage = async (e) => {
   const { id, ext, nom, ab, ctx } = e.data;
   try {
@@ -1007,15 +1574,25 @@ self.onmessage = async (e) => {
     self.postMessage({ id, ok: false, erreur: (err && err.message) || String(err) });
   }
 };
-self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
+// Téléchargements vérifiés (SRI) en parallèle, puis exécution dans l'ordre
+(async () => {
+  const blobs = await Promise.allSettled(LIBS_W.map(([url]) => scriptVerifie(url)));
+  blobs.forEach((b, i) => {
+    if (b.status !== 'fulfilled') return;
+    try { importScripts(b.value); LIBS_W[i][1](); } catch (e) { /* bibliothèque indisponible */ }
+    URL.revokeObjectURL(b.value);
+  });
+  self.postMessage({ type: 'pret', exts: Object.keys(CONVERTISSEURS_W) });
+})();
 `;
 
-// Construit le blob du worker : URLs + langue de la page + code partagé
+// Construit le blob du worker : URLs + langue de la page + empreintes + code partagé
 // (réutilisé tel quel) + bootstrap.
 function creerBlobTravailleur() {
   const partage = document.getElementById('code-partage').textContent;
   const src = 'const URLS = ' + JSON.stringify(URLS_LIBS_TRAVAILLEUR) + ';\n' +
     'const LANGUE_PAGE = ' + JSON.stringify(navigator.language || '') + ';\n' +
+    'const INTEGRITE = ' + JSON.stringify(INTEGRITE) + ';\n' +
     partage + '\n' + BOOTSTRAP_TRAVAILLEUR;
   return URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
 }
@@ -1191,14 +1768,16 @@ async function traiterUnFichier(fichier) {
     // Détecter alerte scan PDF
     const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
     const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
 
     const avecImages = images.length ? ` (+ ${images.length} image${images.length > 1 ? 's' : ''})` : '';
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scan détecté — aucun texte extrait (voir fichier)' : `Converti → ${sortie.nomMd}${avecImages}`,
+      msg:      estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
       resultat,
+      proposerOcr: estScan,
       cliquable: true,
     });
   } catch (err) {
@@ -1329,7 +1908,7 @@ function ajouterLigne({ id, icone, nom, statut, msg, cliquable }) {
   journalListe.appendChild(li);
 }
 
-function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
+function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliquable }) {
   const li = document.getElementById(id);
   if (!li) return;
 
@@ -1340,11 +1919,22 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
   const nomSpan = li.querySelector('.journal-nom');
   if (cliquable && resultat) {
     nomSpan.classList.remove('non-cliquable');
-    const { nomMd, md, images } = resultat;
+    const { nomMd, images } = resultat;
+    // resultat.md est lu au moment du clic : l'OCR peut le remplacer
+    const apercu = () => ouvrirApercu(nomMd, resultat.md);
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
     actions.className = 'journal-actions-item';
+
+    if (proposerOcr) {
+      const btnOcr = document.createElement('button');
+      btnOcr.className = 'btn btn-primaire btn-petit';
+      btnOcr.textContent = '🔍 Reconnaître le texte (OCR)';
+      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors-ligne.';
+      btnOcr.addEventListener('click', () => lancerOcr(li, resultat, btnOcr));
+      actions.appendChild(btnOcr);
+    }
 
     // Avec des images, le .md seul aurait des liens cassés : on livre une archive
     const btnDl = document.createElement('button');
@@ -1353,12 +1943,12 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
     if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
     btnDl.addEventListener('click', () => images.length
       ? genererZip([resultat], baseName(nomMd) + '.zip')
-      : telechargerBlob(md, nomMd));
+      : telechargerBlob(resultat.md, nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
     btnPrev.textContent = '👁️ Aperçu';
-    btnPrev.addEventListener('click', () => ouvrirApercu(nomMd, md));
+    btnPrev.addEventListener('click', apercu);
 
     actions.appendChild(btnDl);
     actions.appendChild(btnPrev);
@@ -1366,7 +1956,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, cliquable }) {
     li.querySelector('.journal-corps').appendChild(actions);
 
     // Clic sur le nom → aperçu
-    nomSpan.addEventListener('click', () => ouvrirApercu(nomMd, md));
+    nomSpan.addEventListener('click', apercu);
   } else {
     nomSpan.classList.add('non-cliquable');
   }
@@ -1445,7 +2035,7 @@ function verifierBibliotheques() {
   if (!window.pdfjsLib)        manquantes.push('PDF.js → .pdf');
   if (!window.XLSX)            manquantes.push('SheetJS → .xlsx/.xls');
   if (!window.Papa)            manquantes.push('PapaParse → .csv/.tsv');
-  if (!window.JSZip)           manquantes.push('JSZip → .pptx / .zip');
+  if (!window.JSZip)           manquantes.push('JSZip → .pptx / .odt / .odp / .zip');
 
   if (manquantes.length) {
     const b = document.getElementById('bandeau-cdn');
@@ -1457,7 +2047,6 @@ function verifierBibliotheques() {
   CONVERTISSEURS = {};
   if (window.mammoth && window.TurndownService) CONVERTISSEURS['.docx'] = convDocx;
   if (window.pdfjsLib) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
     CONVERTISSEURS['.pdf'] = convPdf;
   }
   if (window.XLSX) {
@@ -1471,6 +2060,8 @@ function verifierBibliotheques() {
   }
   if (window.JSZip) {
     CONVERTISSEURS['.pptx'] = convPptx;
+    CONVERTISSEURS['.odt']  = convOdt;
+    CONVERTISSEURS['.odp']  = convOdp;
   }
   // Toujours disponibles
   CONVERTISSEURS['.txt'] = convTxt;

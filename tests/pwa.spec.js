@@ -27,6 +27,30 @@ test('hors-ligne après la première visite', async ({ page, context }) => {
   expect(r.resultats[0].md).toContain('| 1 | 2 |');
 });
 
+test('OCR disponible hors-ligne après un premier usage', async ({ page, context }) => {
+  test.setTimeout(240_000);
+  await ouvrirApp(page);
+  await page.waitForFunction(() => navigator.serviceWorker.controller);   // requêtes servies par le SW
+
+  const ocrUnScan = async () => {
+    await page.evaluate(async () => traiterFichiers([await Fab.pdfScanne('scan.pdf', [['Bonjour Saint-Ouen']])]));
+    await page.locator('.journal-actions-item button', { hasText: 'OCR' }).last().click();
+    await expect(page.locator('.journal-item').last()).toHaveClass(/ok/, { timeout: 100_000 });
+    return page.evaluate(() => resultats[resultats.length - 1].md);
+  };
+
+  expect(await ocrUnScan()).toContain('Bonjour Saint-Ouen');   // en ligne : fichiers OCR mis en cache
+  const cache = await page.evaluate(async () => (await (await caches.open('conv-md-v1')).keys()).map(r => r.url));
+  for (const f of ['tesseract.min.js', 'worker.min.js', '.wasm.js']) {
+    expect(cache.some(u => u.includes(f)), `${f} en cache`).toBe(true);
+  }
+
+  await context.setOffline(true);
+  await page.reload();
+  await page.waitForFunction(() => window.pdfjsLib && window.JSZip);
+  expect(await ocrUnScan()).toContain('Bonjour Saint-Ouen');   // hors-ligne
+});
+
 test('manifeste installable', async ({ page }) => {
   await ouvrirApp(page);
   const manifeste = await page.evaluate(async () => {
