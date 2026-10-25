@@ -23,7 +23,7 @@ Un convertisseur universel de fichiers bureautiques en Markdown (.md) — **100 
 Toute la conversion s'effectue dans votre navigateur, en JavaScript côté client, y compris la reconnaissance de texte (OCR). Aucun fichier n'est envoyé sur un serveur, aucune donnée n'est collectée, aucun cookie n'est posé.
 
 Cette promesse n'est pas seulement tenue par le code : **le navigateur l'impose**.
-- Une **politique de sécurité (CSP)** interdit à la page toute connexion vers un autre serveur que les deux CDN (en lecture seule) qui fournissent les bibliothèques. Même une bibliothèque compromise ne pourrait pas envoyer vos documents ailleurs.
+- Une **politique de sécurité (CSP)** interdit à la page toute connexion vers un autre serveur que les trois CDN (en lecture seule) qui fournissent les bibliothèques. Même une bibliothèque compromise ne pourrait pas envoyer vos documents ailleurs.
 - Chaque bibliothèque est **vérifiée par son empreinte (SRI)** : un fichier modifié sur le CDN est refusé et ne s'exécute pas. La CI compare ces empreintes aux fichiers réellement servis.
 
 ✅ Adapté pour : arrêtés municipaux, rapports internes, documents administratifs, données RH, courriers confidentiels.
@@ -38,10 +38,11 @@ Cette promesse n'est pas seulement tenue par le code : **le navigateur l'impose*
 | LibreOffice Writer | `.odt` | Titres, mise en forme, listes, tableaux, images, notes de bas de page | JSZip |
 | PDF (texte) | `.pdf` | Titres, paragraphes, listes ; en-têtes et pieds de page répétés retirés | PDF.js |
 | PDF scanné | `.pdf` | Texte reconnu par **OCR** (français), à la demande, sur votre appareil | PDF.js + Tesseract.js |
-| Excel | `.xlsx`, `.xls`, `.ods` | Une section par feuille, valeurs telles qu'affichées (dates, montants, %) | SheetJS |
+| Excel | `.xlsx`, `.xls`, `.ods` | Une section par feuille, valeurs telles qu'affichées (dates, montants, %) | SheetJS 0.20 |
 | Données tabulaires | `.csv`, `.tsv` | Tableau ; séparateur et encodage détectés | PapaParse |
 | PowerPoint | `.pptx` | Titres, puces, tableaux, images, notes de l'orateur, dans l'ordre réel | JSZip |
 | LibreOffice Impress | `.odp` | Titres, puces, tableaux, images, notes de l'orateur | JSZip |
+| Photo de document | `.png`, `.jpg`, `.jpeg`, `.webp` | Texte reconnu par **OCR** (français), à la demande | Tesseract.js |
 | Texte | `.txt` | Texte brut | Natif |
 | Page web | `.html`, `.htm` | Structure, tableaux, images intégrées (extraites en fichiers) | Turndown |
 
@@ -52,17 +53,18 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 ## ⚠️ Limites connues
 
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
-- **OCR des PDF scannés** : proposé par un bouton dans le journal. Le premier usage télécharge environ **5 Mo** (moteur et données françaises), ensuite conservés pour un usage hors-ligne. La qualité dépend de celle du scan : le texte reconnu est signalé comme « à relire », avec la confiance moyenne. Français uniquement. Seuls les PDF entièrement scannés sont détectés (pas une page scannée au milieu d'un PDF texte).
+- **OCR des PDF scannés et des photos** : proposé par un bouton dans le journal. Le premier usage télécharge environ **5 Mo** (moteur et données françaises), ensuite conservés pour un usage hors-ligne. La qualité dépend de celle du scan : le texte reconnu est signalé comme « à relire », avec la confiance moyenne. Français uniquement. Seuls les PDF entièrement scannés sont détectés (pas une page scannée au milieu d'un PDF texte). Sur une photo de quelques lignes, la séparation entre paragraphes est approximative.
 - **Données de langue de l'OCR** : ce sont des données, pas du code, et elles ne sont pas vérifiées par empreinte ; la CSP garantit qu'elles ne peuvent venir que du CDN jsDelivr.
 - **Structure des PDF** : un PDF ne contient que du texte positionné ; titres et paragraphes sont déduits de la mise en page (taille de police, interlignes). Les mises en page complexes (plusieurs colonnes, tableaux) sont restituées imparfaitement. Un mot coupé en fin de ligne garde son trait d'union (« collec-tivités ») : sans dictionnaire, impossible de le distinguer d'un mot composé (« porte-monnaie »).
 - **Images `.emf` / `.wmf`** (fréquentes dans les documents Office anciens) : extraites telles quelles, mais la plupart des lecteurs Markdown ne les affichent pas.
-- **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com` (et `cdn.jsdelivr.net` pour l'OCR). Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
+- **Connexion internet requise uniquement à la première visite** : les bibliothèques (~1 Mo total) sont chargées depuis le CDN `cdnjs.cloudflare.com` (plus `cdn.sheetjs.com` pour Excel et `cdn.jsdelivr.net` pour l'OCR). Dès la première visite en ligne, le service worker les met en cache : l'outil fonctionne ensuite **100 % hors-ligne** (et peut être installé comme une application).
 
 ---
 
 ## 🔧 Fonctionnalités
 
 - ✅ **Glisser-déposer multi-fichiers** ou sélecteur classique
+- ✅ **Coller (Ctrl+V)** un texte copié depuis Word, un mail ou une page web : converti directement en Markdown (une capture d'écran collée passe par l'OCR)
 - ✅ **Conversion par lot en parallèle** — jusqu'à 4 fichiers traités simultanément
 - ✅ **Affichage instantané** — les bibliothèques se chargent en arrière-plan sans bloquer la page
 - ✅ **Interface qui ne gèle jamais** — les conversions lourdes (Excel, CSV, PowerPoint) tournent dans un Web Worker
@@ -71,7 +73,8 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 - ✅ **Aperçu intégré** — vérifiez le rendu Markdown avant téléchargement (limité au début des très gros fichiers, pour rester instantané)
 - ✅ **Copier dans le presse-papiers** d'un clic — toujours le fichier complet
 - ✅ **Détection automatique d'encodage** (UTF-8, UTF-16, Windows-1252) pour les CSV/TXT
-- ✅ **OCR des PDF scannés** — reconnaissance du texte sur votre appareil, à la demande, disponible hors-ligne après un premier usage
+- ✅ **OCR des PDF scannés et des photos de documents** — reconnaissance du texte sur votre appareil, à la demande, disponible hors-ligne après un premier usage
+- ✅ **En-tête Obsidian** (case à cocher) — propriétés YAML `title`, `source`, `date` en tête de chaque `.md`, choix mémorisé
 - ✅ **Formats LibreOffice** (`.odt`, `.ods`, `.odp`) au même titre que Microsoft Office
 - ✅ **Accessibilité** : navigation clavier complète, focus trap sur les modales, attributs ARIA
 
@@ -106,7 +109,7 @@ Vous pouvez aussi l'utiliser **complètement hors-ligne** : téléchargez juste 
   - `icone.svg` — icône de l'application
 - **Zéro framework** : JavaScript vanilla, pas de webpack, pas de build
 - **Conversions lourdes déléguées** : les tableurs / CSV / PowerPoint sont parsés dans un **Web Worker** (construit à partir du bloc `#code-partage` d'`index.html`, sans duplication de code), avec repli automatique sur le fil principal si le worker ne peut pas démarrer
-- **Bibliothèques tierces** : chargées depuis [cdnjs.cloudflare.com](https://cdnjs.com) (et [jsDelivr](https://www.jsdelivr.com) pour l'OCR), versions épinglées, empreintes SRI vérifiées
+- **Bibliothèques tierces** : chargées depuis [cdnjs.cloudflare.com](https://cdnjs.com), [cdn.sheetjs.com](https://cdn.sheetjs.com) pour SheetJS (plus publié sur cdnjs depuis la 0.18.5, vulnérable) et [jsDelivr](https://www.jsdelivr.com) pour l'OCR, versions épinglées, empreintes SRI vérifiées
 - **Compatibilité** : Chrome, Edge, Firefox récents (testé sur les 3)
 
 ### Sécurité
@@ -116,6 +119,7 @@ Vous pouvez aussi l'utiliser **complètement hors-ligne** : téléchargez juste 
 - ✅ SRI : toute bibliothèque, y compris celles chargées par les workers et l'OCR, est vérifiée par son empreinte
 - ✅ Construction DOM sécurisée (pas d'`innerHTML` avec données externes → pas de XSS)
 - ✅ HTML malveillant neutralisé (DOMParser inerte, `<script>`/`<style>` retirés)
+- ✅ Liens exécutables (`javascript:`, `vbscript:`, `data:`) retirés du Markdown produit : un clic dans votre éditeur ne peut rien exécuter
 - ✅ Validation par tests automatisés en navigateur (Playwright), à chaque modification
 
 ### Tests
@@ -144,7 +148,7 @@ L'application ne demande ni compilation ni dépendance : `package.json` ne sert 
 > **Note (bibliothèques et service worker)** : modifier `index.html` seul ne demande rien de particulier — les pages sont servies « réseau d'abord », la nouvelle version s'affiche au rechargement suivant. En revanche, si vous **changez la version d'une bibliothèque CDN** :
 > 1. mettez à jour son URL **et son empreinte** dans `index.html` (attribut `integrity` de la balise, ou table `INTEGRITE`) ; `node tests/verifier-cdn.js` donne l'empreinte réelle ;
 > 2. mettez à jour l'URL dans `sw.js` (`PRECACHE`) et incrémentez sa constante `VERSION` pour purger l'ancien cache ;
-> 3. pour les tests, épinglez la même version dans `package.json`.
+> 3. pour les tests, épinglez la même version dans `package.json` (SheetJS : archive `https://cdn.sheetjs.com/xlsx-<version>/xlsx-<version>.tgz`, l'éditeur ne publiant plus sur npm).
 
 ---
 
