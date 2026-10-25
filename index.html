@@ -266,12 +266,12 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.eml,.png,.jpg,.jpeg,.webp"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Images (OCR)</span>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Courriels · Images (OCR)</span>
   </div>
 
   <!-- Hors de la zone de dépôt : un clic ici n'ouvre pas le sélecteur de fichiers -->
@@ -1647,6 +1647,152 @@ async function convHtml(ab, nom, ctx) {
   return { md: creerTurndown().turndown(doc.body.innerHTML), images };
 }
 
+// ---- Courriels .eml (format MIME : en-têtes, parties, pièces jointes) ----
+// Le message est manipulé en chaîne « binaire » (1 caractère = 1 octet) : les
+// parties 8 bits gardent leurs octets jusqu'au décodage dans leur propre jeu de caractères.
+function enBinaire(octets) {
+  let s = '';
+  for (let i = 0; i < octets.length; i += 0x8000) s += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+  return s;
+}
+const enOctets = s => Uint8Array.from(s, c => c.charCodeAt(0) & 0xFF);
+const octetsQp = s => s.replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+
+function decoderTexte(octets, charset) {
+  try { return new TextDecoder(charset || 'utf-8').decode(octets); }
+  catch { return detecterEtDecoder(octets.buffer); }   // jeu de caractères inconnu
+}
+
+// Valeur d'en-tête : octets bruts (UTF-8 ou Windows-1252), puis mots encodés
+// « =?charset?B|Q?…?= » ; deux mots encodés voisins se recollent sans espace.
+function decoderEntete(v) {
+  return detecterEtDecoder(enOctets(v || '').buffer)
+    .replace(/\?=\s+=\?/g, '?==?')
+    .replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (m, charset, enc, t) => {
+      try { return decoderTexte(enOctets(enc.toUpperCase() === 'B' ? atob(t) : octetsQp(t.replace(/_/g, ' '))), charset); }
+      catch { return m; }
+    });
+}
+
+// Paramètre d'un en-tête (boundary, charset, filename, name), forme RFC 2231
+// « filename*=UTF-8''pi%C3%A8ce.pdf » comprise.
+// shortcut: noms découpés en morceaux (filename*0*=, *1*=) non recollés, à ajouter si un vrai courriel en contient
+function parametreMime(valeur, nom) {
+  const v = valeur || '';
+  const etendu = v.match(new RegExp(`;\\s*${nom}\\*=\\s*"?([^']*)'[^']*'([^;"\\s]+)`, 'i'));
+  if (etendu) return decoderTexte(enOctets(octetsQp(etendu[2].replace(/%/g, '='))), etendu[1]);
+  const m = v.match(new RegExp(`;\\s*${nom}=\\s*(?:"([^"]*)"|([^;\\s]+))`, 'i'));
+  return m ? decoderEntete(m[1] ?? m[2]).trim() : '';
+}
+
+// En-têtes (noms en minuscules, lignes repliées recollées) et corps d'une partie
+function analyserMime(brut) {
+  const sep = brut.match(/^\r?\n|\r?\n\r?\n/);
+  const tete = sep ? brut.slice(0, sep.index) : brut;
+  const entetes = {};
+  for (const ligne of tete.replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
+    const m = ligne.match(/^([\w-]+):\s*(.*)$/);
+    if (m && !(m[1].toLowerCase() in entetes)) entetes[m[1].toLowerCase()] = m[2];
+  }
+  return { entetes, corps: sep ? brut.slice(sep.index + sep[0].length) : '' };
+}
+
+function decoderCorps(corps, encodage) {
+  switch ((encodage || '').trim().toLowerCase()) {
+    case 'base64': {
+      const b = corps.replace(/[^A-Za-z0-9+/]/g, '');   // retours à la ligne, remplissage
+      try { return enOctets(atob(b + '='.repeat((4 - b.length % 4) % 4))); }
+      catch { return enOctets(corps); }
+    }
+    case 'quoted-printable': return enOctets(octetsQp(corps.replace(/=\r?\n/g, '')));
+    default: return enOctets(corps);
+  }
+}
+
+// Parties finales du message (les multipart sont parcourus), dans l'ordre
+function partiesMime(brut, acc = [], profondeur = 0) {
+  const { entetes, corps } = analyserMime(brut);
+  const type = (entetes['content-type'] || 'text/plain').split(';')[0].trim().toLowerCase();
+  const limite = parametreMime(entetes['content-type'], 'boundary');
+  if (type.startsWith('multipart/') && limite && profondeur < 20) {
+    for (const morceau of corps.split('--' + limite).slice(1)) {   // [0] : préambule
+      if (morceau.startsWith('--')) break;                          // fin du multipart
+      partiesMime(morceau.replace(/^\r?\n/, '').replace(/\r?\n$/, ''), acc, profondeur + 1);
+    }
+  } else {
+    acc.push({ type, entetes, octets: decoderCorps(corps, entetes['content-transfer-encoding']) });
+  }
+  return acc;
+}
+
+// Fichiers extraits : « image », ou « fichier » s'il y a des pièces jointes (courriel)
+const motFichiers = fichiers => fichiers.some(f => f.chemin.startsWith('pieces-jointes/')) ? 'fichier' : 'image';
+
+// Chemin de fichier → cible de lien Markdown (espaces, accents, parenthèses encodés)
+const lienFichier = chemin => encodeURI(chemin).replace(/[()]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+// .eml → Markdown : en-têtes, corps (HTML de préférence, via convHtml), images
+// intégrées (cid:) et pièces jointes extraites dans pieces-jointes/<document>/
+async function convEml(ab, nom, ctx) {
+  const brut = enBinaire(new Uint8Array(ab));
+  const { entetes } = analyserMime(brut);
+  if (!Object.keys(entetes).length) throw new Error('Courriel vide ou illisible.');
+
+  const dossier = ctx.dossierImages.replace(/^images\//, 'pieces-jointes/');
+  const fichiers = [], pris = new Set(), parCid = new Map();
+  const unique = n => {
+    let c = n, i = 2;
+    while (pris.has(c.toLowerCase())) c = n.replace(/(\.[^.]*)?$/, `_${i++}$1`);
+    pris.add(c.toLowerCase());
+    return c;
+  };
+  let html = null, texte = null;
+  for (const p of partiesMime(brut)) {
+    const disposition = p.entetes['content-disposition'] || '';
+    const nomFichier = parametreMime(disposition, 'filename') || parametreMime(p.entetes['content-type'], 'name');
+    const charset = parametreMime(p.entetes['content-type'], 'charset');
+    const estCorps = !/^\s*attachment/i.test(disposition) && !nomFichier;
+    if (estCorps && p.type === 'text/html' && html === null) { html = decoderTexte(p.octets, charset); continue; }
+    if (estCorps && p.type === 'text/plain' && texte === null) { texte = decoderTexte(p.octets, charset); continue; }
+    if (!p.octets.length) continue;
+    // Nom sûr : pas de dossier (« ../ » d'une pièce jointe piégée sortirait du
+    // dossier à l'extraction du ZIP), ni caractère interdit sous Windows
+    const sur = (nomFichier || `piece-jointe-${fichiers.length + 1}.${p.type === 'message/rfc822' ? 'eml' : extensionImage(p.type)}`)
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.{1,2}$/, '_');
+    const f = { chemin: `${dossier}/${unique(sur)}`, type: p.type, data: p.octets.buffer };
+    fichiers.push(f);
+    const cid = (p.entetes['content-id'] || '').trim().replace(/^<|>$/g, '');
+    if (cid) parCid.set(cid, f);
+  }
+
+  let corps = '', imagesHtml = [];
+  const cites = new Set();   // images intégrées affichées dans le corps
+  if (html !== null) {
+    html = html.replace(/(["'])cid:([^"']+)\1/gi, (m, q, id) => {
+      const f = parCid.get(id);
+      if (!f) return m;
+      cites.add(f);
+      return q + lienFichier(f.chemin) + q;
+    });
+    const r = await convHtml(new TextEncoder().encode(html).buffer, nom, ctx);
+    corps = r.md.trim();
+    imagesHtml = r.images;
+  } else if (texte !== null) {
+    corps = texte.trim();
+  }
+
+  const champ = (titre, cle) => entetes[cle] ? [`- **${titre} :** ${echapperMd(decoderEntete(entetes[cle]).trim())}`] : [];
+  const objet = decoderEntete(entetes.subject || '').trim();
+  const joints = fichiers.filter(f => !cites.has(f));
+  const blocs = [`# ${echapperMd(objet || baseName(nom))}`,
+    [...champ('De', 'from'), ...champ('À', 'to'), ...champ('Cc', 'cc'), ...champ('Date', 'date')].join('\n'),
+    '---', corps || '_(courriel sans texte)_'];
+  if (joints.length) {
+    blocs.push('## Pièces jointes', joints.map(f => `- [${echapperMd(f.chemin.split('/').pop())}](${lienFichier(f.chemin)})`).join('\n'));
+  }
+  return { md: blocs.filter(Boolean).join('\n\n') + '\n', images: [...imagesHtml, ...fichiers] };
+}
+
 // =====================================================================
 // SECTION 3bis : WEB WORKER (conversions lourdes hors du fil principal)
 // Les gros tableurs / CSV / PPTX bloquaient l'interface pendant le parsing.
@@ -1889,7 +2035,7 @@ async function traiterUnFichier(fichier) {
     if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
 
-    const avecImages = images.length ? ` (+ ${images.length} image${images.length > 1 ? 's' : ''})` : '';
+    const avecImages = images.length ? ` (+ ${images.length} ${motFichiers(images)}${images.length > 1 ? 's' : ''})` : '';
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
@@ -2082,7 +2228,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
     const btnDl = document.createElement('button');
     btnDl.className = 'btn btn-secondaire btn-petit';
     btnDl.textContent = images.length ? '⬇️ Télécharger (.zip)' : '⬇️ Télécharger';
-    if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
+    if (images.length) btnDl.title = `${nomMd} et ses ${images.length} ${motFichiers(images)}(s), dans une archive`;
     btnDl.addEventListener('click', () => images.length
       ? genererZip([resultat], baseName(nomMd) + '.zip')
       : telechargerBlob(contenuMd(resultat), nomMd));
@@ -2222,6 +2368,7 @@ function verifierBibliotheques() {
   if (window.TurndownService) {
     CONVERTISSEURS['.html'] = convHtml;
     CONVERTISSEURS['.htm']  = convHtml;
+    CONVERTISSEURS['.eml']  = convEml;
   }
 }
 
