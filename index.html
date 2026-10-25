@@ -231,12 +231,12 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
     <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT</span>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Images (OCR)</span>
   </div>
 
   <!-- Section journal -->
@@ -1451,15 +1451,21 @@ function lignesOcr(data) {
   }))).filter(l => l.texte);
 }
 
-// Rend chaque page en image (PDF.js) puis la fait lire par Tesseract
-async function ocrPdf(fichier, nom, progression) {
+// Photos dont le texte s'obtient par OCR, comme un PDF scanné
+const EXTENSIONS_IMAGE_OCR = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+
+// PDF : chaque page rendue en image (PDF.js) ; photo : une seule page. Puis
+// lecture par Tesseract.
+async function ocrDocument(fichier, nom, progression) {
   progression('OCR : chargement du moteur de reconnaissance…');
   await chargerTesseract();
-  const loadingTask = await ouvrirPdf(await lireCommeArrayBuffer(fichier));
+  const estImage = EXTENSIONS_IMAGE_OCR.has(extOf(nom));
+  const loadingTask = estImage ? null : await ouvrirPdf(await lireCommeArrayBuffer(fichier));
   let worker = null;
   const blobs = [];
   try {
-    const pdf = await loadingTask.promise;
+    const pdf = loadingTask && await loadingTask.promise;
+    const nbPages = pdf ? pdf.numPages : 1;
     blobs.push(...await Promise.all([scriptVerifie(OCR.worker), scriptVerifie(SIMD_WASM ? OCR.coreSimd : OCR.core)]));
     worker = await Tesseract.createWorker('fra', 1, {
       workerPath: blobs[0],
@@ -1471,21 +1477,25 @@ async function ocrPdf(fichier, nom, progression) {
     });
     const pages = [], confiances = [];
     const canvas = document.createElement('canvas');
-    for (let i = 1; i <= pdf.numPages; i++) {
-      progression(`OCR : page ${i} / ${pdf.numPages}…`);
-      const page = await pdf.getPage(i);
-      const largeur = page.getViewport({ scale: 1 }).width;
-      const vue = page.getViewport({ scale: Math.min(300 / 72, OCR_LARGEUR_MAX / largeur) });
-      canvas.width = Math.ceil(vue.width);
-      canvas.height = Math.ceil(vue.height);
+    for (let i = 1; i <= nbPages; i++) {
+      progression(`OCR : page ${i} / ${nbPages}…`);
+      const page = pdf && await pdf.getPage(i);
+      // Photo : createImageBitmap applique l'orientation EXIF (photo de téléphone)
+      const image = page ? null : await createImageBitmap(fichier).catch(() => { throw new Error('image illisible'); });
+      const largeur = page ? page.getViewport({ scale: 1 }).width : image.width;
+      const echelle = Math.min(page ? 300 / 72 : 1, OCR_LARGEUR_MAX / largeur);
+      const vue = page && page.getViewport({ scale: echelle });
+      canvas.width = Math.ceil(page ? vue.width : image.width * echelle);
+      canvas.height = Math.ceil(page ? vue.height : image.height * echelle);
       const ctx2d = canvas.getContext('2d');
-      ctx2d.fillStyle = '#fff';
+      ctx2d.fillStyle = '#fff';   // fond blanc : une image transparente serait lue sur du noir
       ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      if (page) await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      else { ctx2d.drawImage(image, 0, 0, canvas.width, canvas.height); image.close(); }
       const { data } = await worker.recognize(canvas, {}, { blocks: true });
       pages.push({ lignes: lignesOcr(data), haut: 0, bas: -canvas.height, hauteur: canvas.height });
       confiances.push(data.confidence);
-      page.cleanup();
+      if (page) page.cleanup();
     }
     canvas.width = canvas.height = 0;   // libérer la mémoire de l'image
 
@@ -1496,7 +1506,7 @@ async function ocrPdf(fichier, nom, progression) {
   } finally {
     if (worker) await worker.terminate();
     blobs.forEach(u => URL.revokeObjectURL(u));
-    loadingTask.destroy();
+    if (loadingTask) loadingTask.destroy();
   }
 }
 
@@ -1512,7 +1522,7 @@ function lancerOcr(li, resultat, bouton) {
   msg.textContent = 'OCR : en attente…';
   fileOcr = fileOcr.then(async () => {
     try {
-      resultat.md = await ocrPdf(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
+      resultat.md = await ocrDocument(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
       delete resultat.fichier;
       li.className = 'journal-item ok';
       icone.textContent = '✅';
@@ -1527,6 +1537,11 @@ function lancerOcr(li, resultat, bouton) {
   });
   return fileOcr;
 }
+
+// Photo : son texte ne s'obtient que par OCR, lancé à la demande depuis le
+// journal (environ 5 Mo à télécharger la première fois)
+const convImage = async (ab, nom) =>
+  `# ${baseName(nom)}\n\n> ⚠️ Image : utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.\n`;
 
 // .txt → Markdown
 async function convTxt(ab, nom) {
@@ -1793,7 +1808,8 @@ async function traiterUnFichier(fichier) {
     const { md, images } = await convertir(fichier, ext, nom, { dossierImages: sortie.dossierImages });
 
     // Détecter alerte scan PDF
-    const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
+    const estImage = EXTENSIONS_IMAGE_OCR.has(ext);
+    const estScan  = estImage || (ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan'));
     const resultat = { nom, nomMd: sortie.nomMd, md, images };
     if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
@@ -1802,7 +1818,8 @@ async function traiterUnFichier(fichier) {
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
+      msg:      estImage ? 'Image : lancez l\'OCR pour reconnaître son texte.'
+              : estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
       resultat,
       proposerOcr: estScan,
       cliquable: true,
@@ -2105,6 +2122,7 @@ function verifierBibliotheques() {
   }
   // Toujours disponibles
   CONVERTISSEURS['.txt'] = convTxt;
+  for (const ext of EXTENSIONS_IMAGE_OCR) CONVERTISSEURS[ext] = convImage;
   if (window.TurndownService) {
     CONVERTISSEURS['.html'] = convHtml;
     CONVERTISSEURS['.htm']  = convHtml;

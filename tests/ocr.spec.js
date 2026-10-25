@@ -52,6 +52,29 @@ test('PDF scanné : texte reconnu par OCR, page par page', async ({ page }) => {
   expect(normaliser(fs.readFileSync(await dl.path(), 'utf8'))).toContain('stationnement est interdit');
 });
 
+test('photo d\'un document : texte reconnu par OCR, à la demande', async ({ page }) => {
+  await ouvrirApp(page);
+  await page.evaluate(async () => traiterFichiers([await Fab.imageTexte('courrier.jpg',
+    ['Mairie de Saint-Ouen', '', 'Objet : demande de stationnement'], 'image/jpeg')]));
+  await expect(page.locator('.journal-item')).toHaveClass(/warn/);
+  await expect(page.locator('.journal-msg')).toHaveText('Image : lancez l\'OCR pour reconnaître son texte.');
+
+  await page.locator('.journal-actions-item button', { hasText: 'OCR' }).click();
+  await expect(page.locator('.journal-item')).toHaveClass(/ok/, { timeout: 150_000 });
+  const md = await page.evaluate(() => resultats[0].md);
+  expect(md).toMatch(/^# courrier\n\n> Texte obtenu par reconnaissance optique/);
+  expect(md).not.toContain('*Page 1*');   // une seule page : pas de repère
+  // Deux lignes seulement : pas assez d'indices pour distinguer blanc et interligne
+  expect(normaliser(md)).toMatch(/mairie de saint-ouen\n+objet : demande de stationnement/);
+});
+
+test('image illisible : message clair', async ({ page }) => {
+  await ouvrirApp(page);
+  await page.evaluate(() => traiterFichiers([Fab.texte('abime.png', 'pas une image')]));
+  await page.locator('.journal-actions-item button', { hasText: 'OCR' }).click();
+  await expect(page.locator('.journal-msg')).toHaveText('OCR impossible : image illisible', { timeout: 60_000 });
+});
+
 test('moteur OCR inaccessible : message clair, nouvel essai possible', async ({ page }) => {
   await page.route('**/tesseract.min.js', route => route.abort());
   const bouton = await deposerScan(page);

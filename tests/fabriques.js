@@ -62,6 +62,21 @@
   // PDF « scanné » : chaque page n'est qu'une image JPEG de son texte (A4 à
   // 150 ppp), sans aucun texte extractible — comme une numérisation.
   // pages : [['ligne 1', 'ligne 2', …], …] ; une ligne '' laisse un blanc
+  // Page A4 à 150 ppp portant les lignes de texte (noir sur blanc)
+  function canvasTexte(lignes) {
+    const c = Object.assign(document.createElement('canvas'), { width: 1240, height: 1754 });
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#000'; g.font = '44px sans-serif'; g.textBaseline = 'top';
+    lignes.forEach((t, i) => g.fillText(t, 120, 160 + i * 80));
+    return c;
+  }
+
+  // Photo d'un document (.png, .jpg…) portant les lignes de texte
+  async function imageTexte(nom, lignes, type = 'image/png') {
+    return new File([await new Promise(r => canvasTexte(lignes).toBlob(r, type))], nom, { type });
+  }
+
   async function pdfScanne(nom, pages) {
     const objets = [];
     const ajouter = contenu => { objets.push(contenu); return objets.length; };
@@ -69,11 +84,7 @@
     const arbre     = ajouter(null);
     const enfants = [];
     for (const lignes of pages) {
-      const c = Object.assign(document.createElement('canvas'), { width: 1240, height: 1754 });
-      const g = c.getContext('2d');
-      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
-      g.fillStyle = '#000'; g.font = '44px sans-serif'; g.textBaseline = 'top';
-      lignes.forEach((t, i) => g.fillText(t, 120, 160 + i * 80));
+      const c = canvasTexte(lignes);
       const jpeg = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92))).arrayBuffer());
       let octets = '';
       for (const o of jpeg) octets += String.fromCharCode(o);
@@ -214,7 +225,7 @@
   const odp = (nom, corps, options) => odf(nom, 'presentation', corps, options);
 
   window.Fab = {
-    PNG_B64, texte, pdf, pdfScanne, classeur,
+    PNG_B64, texte, pdf, pdfScanne, imageTexte, classeur,
     docx, docxPara, docxImage,
     pptx, pptxTitre, pptxCorps, pptxZone, pptxTableau, pptxImage,
     odt, odp,
