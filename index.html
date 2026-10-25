@@ -705,28 +705,59 @@ function creerTurndown() {
   if (turndownPartage) return turndownPartage;
   const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 
-  // Cellules
-  td.addRule('tableCell', {
-    filter: ['th', 'td'],
-    replacement: content => ' ' + content.trim().replace(/\|/g, '\\|').replace(/\n+/g, ' ') + ' |'
+  // Tableaux : reconstruits depuis le DOM (voir grilleTableau). Le contenu déjà
+  // converti des lignes et cellules est ignoré, d'où une sortie vide pour elles.
+  td.addRule('tableInterne', { filter: ['thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption'], replacement: () => '' });
+  td.addRule('table', {
+    filter: 'table',
+    replacement: (_, table) => {
+      const grille = grilleTableau(table, cellule => texteCelluleHtml(td, cellule));
+      if (!grille.length) return '';
+      const legende = table.caption && table.caption.textContent.trim();
+      return '\n\n' + (legende ? `**${td.escape(legende)}**\n\n` : '') + construireTableMd(grille) + '\n\n';
+    },
   });
-  // Lignes
-  td.addRule('tableRow', {
-    filter: 'tr',
-    replacement: (content, node) => {
-      const isHeader = node.parentNode.nodeName === 'THEAD' || node.rowIndex === 0;
-      let row = '|' + content + '\n';
-      if (isHeader) row += '|' + Array.from(node.cells).map(() => ' --- ').join('|') + '|\n';
-      return row;
-    }
-  });
-  // Sections de tableau
-  td.addRule('tableSection', { filter: ['thead', 'tbody', 'tfoot'], replacement: c => c });
-  // Tableau global
-  td.addRule('table', { filter: 'table', replacement: c => '\n\n' + c.trim() + '\n\n' });
 
   turndownPartage = td;
   return td;
+}
+
+// Contenu Markdown d'une cellule, sur une ligne. Raccourci pour le cas courant
+// (texte seul, éventuellement dans des <p>) : éviter un appel complet à Turndown
+// par cellule, coûteux sur les grands tableaux.
+function texteCelluleHtml(td, cellule) {
+  const brut = cellule.querySelector(':scope *:not(p)') === null;
+  const md = brut
+    ? [...cellule.querySelectorAll(':scope > p')].map(p => p.textContent).join(' ') || cellule.textContent
+    : td.turndown(cellule.innerHTML);
+  return (brut ? td.escape(md) : md).replace(/\s*\n+\s*/g, ' ').trim();
+}
+
+// Grille réelle d'un tableau HTML : une cellule fusionnée (colspan / rowspan)
+// occupe toutes ses places, sa valeur dans la première et des cases vides
+// ailleurs. Sans cela, une première ligne fusionnée (« Budget 2026 » sur deux
+// colonnes) déclarait un tableau d'une colonne, et le Markdown ignorait
+// silencieusement les colonnes suivantes à l'affichage.
+function grilleTableau(table, texte) {
+  const grille = [];
+  [...table.rows].forEach((tr, r) => {
+    grille[r] = grille[r] || [];
+    let c = 0;
+    for (const cellule of tr.cells) {
+      while (grille[r][c] !== undefined) c++;   // places prises par un rowspan au-dessus
+      const largeur = Math.min(Math.max(cellule.colSpan || 1, 1), 100);
+      const hauteur = Math.min(Math.max(cellule.rowSpan || 1, 1), 1000);
+      const valeur  = texte(cellule);
+      for (let dr = 0; dr < hauteur; dr++) {
+        const ligne = grille[r + dr] = grille[r + dr] || [];
+        for (let dc = 0; dc < largeur; dc++) ligne[c + dc] = dr === 0 && dc === 0 ? valeur : '';
+      }
+      c += largeur;
+    }
+  });
+  // Un rowspan qui déborde du tableau ne doit pas créer de lignes fantômes
+  grille.length = Math.min(grille.length, table.rows.length);
+  return grille.map(l => Array.from({ length: l.length }, (_, i) => l[i] ?? ''));
 }
 
 // .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
