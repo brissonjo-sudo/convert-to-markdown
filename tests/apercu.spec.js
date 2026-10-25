@@ -42,7 +42,8 @@ test('« Copier » copie le fichier complet, pas seulement l\'aperçu', async ({
   await page.locator('.journal-actions-item button', { hasText: 'Aperçu' }).click();
   await page.click('#btn-copier');
   await expect(page.locator('#btn-copier')).toHaveText('✅ Copié !');
-  const copie = await page.evaluate(() => navigator.clipboard.readText());
+  // Le presse-papiers de Windows convertit les fins de ligne en \r\n
+  const copie = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
   expect(copie.length).toBe(taille);
 });
 
