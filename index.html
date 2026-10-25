@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <!-- Confidentialité imposée par le navigateur, et non seulement promise :
-       - connect-src : la page ne peut se connecter qu'à elle-même et aux deux CDN
+       - connect-src : la page ne peut se connecter qu'à elle-même et aux trois CDN
          (en lecture seule) qui servent les bibliothèques ; aucun envoi de vos
          fichiers vers un autre serveur n'est possible, même par une bibliothèque
-         compromise ;
+         compromise (cdn.sheetjs.com : SheetJS n'est plus publié sur cdnjs depuis
+         0.18.5, version vulnérable) ;
        - img-src, form-action, base-uri, object-src : autres voies de fuite fermées ;
        - script-src : 'unsafe-inline' pour le code de cette page, 'wasm-unsafe-eval'
          pour le moteur OCR (WebAssembly), blob: pour les scripts vérifiés (SRI)
          exécutés dans les workers.
        Chaque bibliothèque est en outre vérifiée par son empreinte (SRI, voir
        INTEGRITE) : un fichier modifié sur le CDN est refusé. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📄 ➜ 📝 Convertisseur Markdown</title>
 
@@ -23,7 +24,7 @@
   <link rel="apple-touch-icon" href="icone.svg">
   <meta name="theme-color" content="#2563eb">
 
-  <!-- Bibliothèques : cdnjs.cloudflare.com, versions épinglées, empreinte SRI
+  <!-- Bibliothèques : cdnjs.cloudflare.com (SheetJS : cdn.sheetjs.com), versions épinglées, empreinte SRI
        vérifiée par le navigateur (un attribut integrity par ligne : la CI compare
        chaque empreinte au fichier réellement servi par le CDN, voir
        tests/verifier-cdn.js).
@@ -33,7 +34,7 @@
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" integrity="sha384-nFoSjZIoH3CCp8W639jJyQkuPHinJ2NHe7on1xvlUA7SuGfJAfvMldrsoAVm6ECz" crossorigin="anonymous" onerror="console.warn('CDN : mammoth introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js" integrity="sha384-m6AyXEhyWRg2s2wrkDV64LGkaManYgMSAjn2U+zymzSJ42WthRSjCu1AqZJhoQV0" crossorigin="anonymous" onerror="console.warn('CDN : Turndown introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" onerror="console.warn('CDN : PDF.js introuvable ou altéré')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous" onerror="console.warn('CDN : PapaParse introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous" onerror="console.warn('CDN : JSZip introuvable ou altéré')"></script>
 
@@ -948,7 +949,7 @@ const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174
 // format lu par tests/verifier-cdn.js (CI) et tests/serveur.js.
 const INTEGRITE = {
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js': 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js': 'sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw',
+  'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js': 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT',
   'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js': 'sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js': 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG',
   'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js': 'sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM',
@@ -1547,7 +1548,7 @@ const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv',
 // self.__URLS_LIBS_TEST__ (page.route de Playwright n'intercepte pas les
 // importScripts d'un worker blob).
 const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
-  xlsx:      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  xlsx:      'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
   papaparse: 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',
   jszip:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
 };

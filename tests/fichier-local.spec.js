@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { test, expect } = require('./aide');
-const { fichierLocal, empreintesLocales } = require('./serveur');
+const { fichierLocal, empreintesLocales, URL_CDN } = require('./serveur');
 
 test('conversions fonctionnelles en file://, sous CSP et SRI', async ({ page }) => {
   // Copie d'index.html avec les empreintes des copies locales (les URLs restent
@@ -16,7 +16,7 @@ test('conversions fonctionnelles en file://, sous CSP et SRI', async ({ page }) 
   const fichier = path.join(dossier, 'index.html');
   fs.writeFileSync(fichier, empreintesLocales(fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')));
 
-  await page.route(/^https:\/\/(cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm)\//, route => {
+  await page.route(url => URL_CDN.test(url.href), route => {
     const local = fichierLocal(route.request().url());
     if (!local || !fs.existsSync(local)) return route.abort();
     route.fulfill({ path: local, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/javascript' } });

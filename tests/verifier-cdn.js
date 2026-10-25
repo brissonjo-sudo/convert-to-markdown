@@ -13,7 +13,7 @@ const crypto = require('crypto');
 const RACINE = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(RACINE, 'index.html'), 'utf8');
 const sw   = fs.readFileSync(path.join(RACINE, 'sw.js'), 'utf8');
-const URL_CDN = /https:\/\/(?:cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm)\/[^'"`\s]+/g;
+const URL_CDN = /https:\/\/(?:cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm|cdn\.sheetjs\.com\/xlsx-[^/]+\/package)\/[^'"`\s]+/g;
 
 let erreurs = 0;
 const erreur = msg => { console.error('✘ ' + msg); erreurs++; };
@@ -36,8 +36,8 @@ for (const balise of html.match(/<script\b[^>]*\bsrc="https:[^>]*>/g) || []) {
 
 // Tout script .js venant d'un CDN (dans la page ou le service worker) a une
 // empreinte : sinon il pourrait s'exécuter sans vérification
-const CDN_SW = { CDN: 'https://cdnjs.cloudflare.com/ajax/libs', NPM: 'https://cdn.jsdelivr.net/npm' };
-const urlsSw = [...sw.matchAll(/`\$\{(CDN|NPM)\}(\/[^`]+)`/g)].map(m => CDN_SW[m[1]] + m[2]);
+const CDN_SW = Object.fromEntries([...sw.matchAll(/^const (CDN|NPM|SHEETJS) = '([^']+)'/gm)].map(m => [m[1], m[2]]));
+const urlsSw = [...sw.matchAll(/`\$\{(CDN|NPM|SHEETJS)\}(\/[^`]+)`/g)].map(m => CDN_SW[m[1]] + m[2]);
 for (const url of new Set([...(html.match(URL_CDN) || []), ...urlsSw])) {
   if (url.endsWith('.js') && !empreintes.has(url)) erreur(`script de CDN sans empreinte : ${url}`);
 }

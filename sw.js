@@ -9,8 +9,10 @@
  */
 'use strict';
 
-const VERSION = 'conv-md-v1';                 // ← nom du cache ; bump si libs CDN changent
+const VERSION = 'conv-md-v2';                 // ← nom du cache ; bump si libs CDN changent
 const CDN = 'https://cdnjs.cloudflare.com/ajax/libs';
+// SheetJS n'est plus publié sur cdnjs depuis 0.18.5 (version vulnérable)
+const SHEETJS = 'https://cdn.sheetjs.com/xlsx-0.20.3/package';
 
 // Coquille de l'application + 7 URLs CDN épinglées (6 libs + worker PDF.js).
 const PRECACHE = [
@@ -22,7 +24,7 @@ const PRECACHE = [
   `${CDN}/turndown/7.1.2/turndown.min.js`,
   `${CDN}/pdf.js/3.11.174/pdf.min.js`,
   `${CDN}/pdf.js/3.11.174/pdf.worker.min.js`,
-  `${CDN}/xlsx/0.18.5/xlsx.full.min.js`,
+  `${SHEETJS}/dist/xlsx.full.min.js`,
   `${CDN}/PapaParse/5.4.1/papaparse.min.js`,
   `${CDN}/jszip/3.10.1/jszip.min.js`,
 ];
