@@ -1,4 +1,4 @@
-// Courriels .eml (Outlook « Enregistrer sous », Thunderbird) : en-têtes, corps,
+// Courriels .eml (Thunderbird, Outlook sur le web, nouvel Outlook) : en-têtes, corps,
 // image intégrée, pièces jointes.
 'use strict';
 
