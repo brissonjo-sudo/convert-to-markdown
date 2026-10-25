@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <!-- Confidentialité imposée par le navigateur, et non seulement promise :
-       - connect-src : la page ne peut se connecter qu'à elle-même et aux deux CDN
+       - connect-src : la page ne peut se connecter qu'à elle-même et aux trois CDN
          (en lecture seule) qui servent les bibliothèques ; aucun envoi de vos
          fichiers vers un autre serveur n'est possible, même par une bibliothèque
-         compromise ;
+         compromise (cdn.sheetjs.com : SheetJS n'est plus publié sur cdnjs depuis
+         0.18.5, version vulnérable) ;
        - img-src, form-action, base-uri, object-src : autres voies de fuite fermées ;
        - script-src : 'unsafe-inline' pour le code de cette page, 'wasm-unsafe-eval'
          pour le moteur OCR (WebAssembly), blob: pour les scripts vérifiés (SRI)
          exécutés dans les workers.
        Chaque bibliothèque est en outre vérifiée par son empreinte (SRI, voir
        INTEGRITE) : un fichier modifié sur le CDN est refusé. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; worker-src 'self' blob:; connect-src 'self' data: blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📄 ➜ 📝 Convertisseur Markdown</title>
 
@@ -23,7 +24,7 @@
   <link rel="apple-touch-icon" href="icone.svg">
   <meta name="theme-color" content="#2563eb">
 
-  <!-- Bibliothèques : cdnjs.cloudflare.com, versions épinglées, empreinte SRI
+  <!-- Bibliothèques : cdnjs.cloudflare.com (SheetJS : cdn.sheetjs.com), versions épinglées, empreinte SRI
        vérifiée par le navigateur (un attribut integrity par ligne : la CI compare
        chaque empreinte au fichier réellement servi par le CDN, voir
        tests/verifier-cdn.js).
@@ -33,7 +34,7 @@
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" integrity="sha384-nFoSjZIoH3CCp8W639jJyQkuPHinJ2NHe7on1xvlUA7SuGfJAfvMldrsoAVm6ECz" crossorigin="anonymous" onerror="console.warn('CDN : mammoth introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/turndown/7.1.2/turndown.min.js" integrity="sha384-m6AyXEhyWRg2s2wrkDV64LGkaManYgMSAjn2U+zymzSJ42WthRSjCu1AqZJhoQV0" crossorigin="anonymous" onerror="console.warn('CDN : Turndown introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" onerror="console.warn('CDN : PDF.js introuvable ou altéré')"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" onerror="console.warn('CDN : SheetJS introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous" onerror="console.warn('CDN : PapaParse introuvable ou altéré')"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous" onerror="console.warn('CDN : JSZip introuvable ou altéré')"></script>
 
@@ -103,6 +104,10 @@
     .zone-depot-titre { font-size: 1.1rem; font-weight: 600; margin-bottom: .25rem; }
     .zone-depot-sub   { font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
     .zone-depot-sub span { color: var(--accent); text-decoration: underline; }
+    .option {
+      display: flex; align-items: center; justify-content: center; gap: .4rem;
+      margin-top: .75rem; font-size: .85rem; color: var(--muted); cursor: pointer;
+    }
     .formats-badge {
       display: inline-block;
       background: #f1f5f9; border-radius: 20px;
@@ -230,13 +235,19 @@
        role="button" tabindex="0"
        aria-label="Zone de dépôt — glissez vos fichiers ou appuyez sur Entrée pour ouvrir le sélecteur">
     <input type="file" id="input-fichiers" multiple
-           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm"
+           accept=".pdf,.docx,.doc,.odt,.xlsx,.xls,.ods,.csv,.tsv,.pptx,.ppt,.odp,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
            aria-hidden="true" tabindex="-1">
     <div class="zone-depot-icone">⬇️</div>
     <p class="zone-depot-titre">Glissez vos fichiers ici</p>
-    <p class="zone-depot-sub">ou <span>cliquez pour choisir</span></p>
-    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT</span>
+    <p class="zone-depot-sub">ou <span>cliquez pour choisir</span>, ou collez un texte (Ctrl+V)</p>
+    <span class="formats-badge">PDF · Word · Excel · CSV · PowerPoint · LibreOffice · HTML · TXT · Images (OCR)</span>
   </div>
+
+  <!-- Hors de la zone de dépôt : un clic ici n'ouvre pas le sélecteur de fichiers -->
+  <label class="option">
+    <input type="checkbox" id="opt-yaml">
+    Ajouter un en-tête Obsidian (titre, fichier source, date)
+  </label>
 
   <!-- Section journal -->
   <section class="journal-section" id="journal-section" hidden>
@@ -347,6 +358,11 @@ function desescaperXml(s) {
     .replace(/&amp;/g,  '&');
 }
 
+// Cible exécutable (javascript:, vbscript:, data:) : le .md peut être ouvert dans
+// un éditeur (Obsidian…) où un clic l'exécuterait. Comme le navigateur, on ignore
+// espaces et caractères de contrôle dans le schéma (« java\tscript: »).
+const lienDangereux = href => /^(javascript|vbscript|data):/i.test(String(href || '').replace(/[\x00-\x20]/g, ''));
+
 // Extension de fichier d'une image d'après son type MIME (image/jpeg → jpg)
 function extensionImage(type) {
   const sous = (String(type || '').split(';')[0].split('/')[1] || '').toLowerCase();
@@ -419,6 +435,17 @@ function rognerGrille(lignes) {
 function lignesFeuille(ws) {
   if (!ws || !ws['!ref']) return [];
   const plage  = XLSX.utils.decode_range(ws['!ref']);
+  // Plage bornée aux cellules présentes : celle déclarée couvre parfois toute la
+  // grille (1 048 576 lignes) après une simple mise en forme, et figeait l'onglet.
+  let finL = -1, finC = -1;
+  for (const cle in ws) {
+    if (cle[0] === '!') continue;
+    const { r, c } = XLSX.utils.decode_cell(cle);
+    if (r > finL) finL = r;
+    if (c > finC) finC = c;
+  }
+  plage.e.r = Math.min(plage.e.r, finL);
+  plage.e.c = Math.min(plage.e.c, finC);
   const lignes = [];
   for (let r = plage.s.r; r <= plage.e.r; r++) {
     const ligne = [];
@@ -741,7 +768,7 @@ function imageOdf(cadre, c) {
   const href  = img.attrs['xlink:href'] || '';
   const titre = premierXml(cadre, 'svg:title') || premierXml(cadre, 'svg:desc');
   const alt   = (titre ? texteXml(titre) : '').replace(/[[\]\s]+/g, ' ').trim();
-  if (/^[a-z]+:/i.test(href)) return `![${alt}](${href})`;
+  if (/^[a-z]+:/i.test(href)) return lienDangereux(href) ? '' : `![${alt}](${href})`;
   const data = c.donneesImages.get(href);
   if (!data) return '';
   if (!c.imageParChemin.has(href)) {
@@ -771,7 +798,7 @@ function enLigneOdf(n, c) {
       case 'text:span':       return encadrerMd(enLigneOdf(e, c), c.styles.get(e.attrs['text:style-name']));
       case 'text:a': {
         const t = enLigneOdf(e, c), href = e.attrs['xlink:href'];
-        return href && t.trim() ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
+        return href && t.trim() && !lienDangereux(href) ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
       }
       case 'text:note': {   // note de bas de page → note Markdown [^n]
         const corps = premierXml(e, 'text:note-body');
@@ -948,7 +975,7 @@ const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174
 // format lu par tests/verifier-cdn.js (CI) et tests/serveur.js.
 const INTEGRITE = {
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js': 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js': 'sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw',
+  'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js': 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT',
   'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js': 'sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js': 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG',
   'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js': 'sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM',
@@ -1098,6 +1125,14 @@ function grilleTableau(table, texte) {
   return grille.map(l => Array.from({ length: l.length }, (_, i) => l[i] ?? ''));
 }
 
+// Retire les cibles exécutables (voir lienDangereux) : un lien garde son texte,
+// une image son texte alternatif.
+function neutraliserLiens(doc) {
+  for (const el of doc.querySelectorAll('[href], [src]')) {
+    for (const attr of ['href', 'src']) if (lienDangereux(el.getAttribute(attr))) el.removeAttribute(attr);
+  }
+}
+
 // .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
 // (ctx.dossierImages) au lieu d'être recopiées en base64 dans le Markdown, ce
 // qui le rendait illisible et pouvait le faire peser plusieurs Mo.
@@ -1120,6 +1155,7 @@ async function convDocx(ab, nom, ctx) {
 // notes Markdown natives ([^1] … [^1]: texte), comme pour les fichiers .odt.
 function notesWordEnMarkdown(html, td) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  neutraliserLiens(doc);
   const numeros = new Map();   // id de la note → numéro d'affichage
   for (const a of doc.querySelectorAll('a[href^="#footnote-"], a[href^="#endnote-"]')) {
     const id = a.getAttribute('href').slice(1);
@@ -1425,15 +1461,21 @@ function lignesOcr(data) {
   }))).filter(l => l.texte);
 }
 
-// Rend chaque page en image (PDF.js) puis la fait lire par Tesseract
-async function ocrPdf(fichier, nom, progression) {
+// Photos dont le texte s'obtient par OCR, comme un PDF scanné
+const EXTENSIONS_IMAGE_OCR = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+
+// PDF : chaque page rendue en image (PDF.js) ; photo : une seule page. Puis
+// lecture par Tesseract.
+async function ocrDocument(fichier, nom, progression) {
   progression('OCR : chargement du moteur de reconnaissance…');
   await chargerTesseract();
-  const loadingTask = await ouvrirPdf(await lireCommeArrayBuffer(fichier));
+  const estImage = EXTENSIONS_IMAGE_OCR.has(extOf(nom));
+  const loadingTask = estImage ? null : await ouvrirPdf(await lireCommeArrayBuffer(fichier));
   let worker = null;
   const blobs = [];
   try {
-    const pdf = await loadingTask.promise;
+    const pdf = loadingTask && await loadingTask.promise;
+    const nbPages = pdf ? pdf.numPages : 1;
     blobs.push(...await Promise.all([scriptVerifie(OCR.worker), scriptVerifie(SIMD_WASM ? OCR.coreSimd : OCR.core)]));
     worker = await Tesseract.createWorker('fra', 1, {
       workerPath: blobs[0],
@@ -1445,21 +1487,25 @@ async function ocrPdf(fichier, nom, progression) {
     });
     const pages = [], confiances = [];
     const canvas = document.createElement('canvas');
-    for (let i = 1; i <= pdf.numPages; i++) {
-      progression(`OCR : page ${i} / ${pdf.numPages}…`);
-      const page = await pdf.getPage(i);
-      const largeur = page.getViewport({ scale: 1 }).width;
-      const vue = page.getViewport({ scale: Math.min(300 / 72, OCR_LARGEUR_MAX / largeur) });
-      canvas.width = Math.ceil(vue.width);
-      canvas.height = Math.ceil(vue.height);
+    for (let i = 1; i <= nbPages; i++) {
+      progression(`OCR : page ${i} / ${nbPages}…`);
+      const page = pdf && await pdf.getPage(i);
+      // Photo : createImageBitmap applique l'orientation EXIF (photo de téléphone)
+      const image = page ? null : await createImageBitmap(fichier).catch(() => { throw new Error('image illisible'); });
+      const largeur = page ? page.getViewport({ scale: 1 }).width : image.width;
+      const echelle = Math.min(page ? 300 / 72 : 1, OCR_LARGEUR_MAX / largeur);
+      const vue = page && page.getViewport({ scale: echelle });
+      canvas.width = Math.ceil(page ? vue.width : image.width * echelle);
+      canvas.height = Math.ceil(page ? vue.height : image.height * echelle);
       const ctx2d = canvas.getContext('2d');
-      ctx2d.fillStyle = '#fff';
+      ctx2d.fillStyle = '#fff';   // fond blanc : une image transparente serait lue sur du noir
       ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      if (page) await page.render({ canvasContext: ctx2d, viewport: vue }).promise;
+      else { ctx2d.drawImage(image, 0, 0, canvas.width, canvas.height); image.close(); }
       const { data } = await worker.recognize(canvas, {}, { blocks: true });
       pages.push({ lignes: lignesOcr(data), haut: 0, bas: -canvas.height, hauteur: canvas.height });
       confiances.push(data.confidence);
-      page.cleanup();
+      if (page) page.cleanup();
     }
     canvas.width = canvas.height = 0;   // libérer la mémoire de l'image
 
@@ -1470,7 +1516,7 @@ async function ocrPdf(fichier, nom, progression) {
   } finally {
     if (worker) await worker.terminate();
     blobs.forEach(u => URL.revokeObjectURL(u));
-    loadingTask.destroy();
+    if (loadingTask) loadingTask.destroy();
   }
 }
 
@@ -1486,7 +1532,7 @@ function lancerOcr(li, resultat, bouton) {
   msg.textContent = 'OCR : en attente…';
   fileOcr = fileOcr.then(async () => {
     try {
-      resultat.md = await ocrPdf(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
+      resultat.md = await ocrDocument(resultat.fichier, resultat.nom, t => { msg.textContent = t; });
       delete resultat.fichier;
       li.className = 'journal-item ok';
       icone.textContent = '✅';
@@ -1501,6 +1547,11 @@ function lancerOcr(li, resultat, bouton) {
   });
   return fileOcr;
 }
+
+// Photo : son texte ne s'obtient que par OCR, lancé à la demande depuis le
+// journal (environ 5 Mo à télécharger la première fois)
+const convImage = async (ab, nom) =>
+  `# ${baseName(nom)}\n\n> ⚠️ Image : utilisez « Reconnaître le texte (OCR) » dans le journal de conversion.\n`;
 
 // .txt → Markdown
 async function convTxt(ab, nom) {
@@ -1529,6 +1580,7 @@ async function convHtml(ab, nom, ctx) {
       img.remove();   // data: illisible → on l'omet plutôt que de recopier un bloc base64
     }
   }
+  neutraliserLiens(doc);
   return { md: creerTurndown().turndown(doc.body.innerHTML), images };
 }
 
@@ -1547,7 +1599,7 @@ const EXTENSIONS_TRAVAILLEUR = new Set(['.xlsx', '.xls', '.ods', '.csv', '.tsv',
 // self.__URLS_LIBS_TEST__ (page.route de Playwright n'intercepte pas les
 // importScripts d'un worker blob).
 const URLS_LIBS_TRAVAILLEUR = self.__URLS_LIBS_TEST__ || {
-  xlsx:      'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  xlsx:      'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
   papaparse: 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',
   jszip:     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
 };
@@ -1766,8 +1818,9 @@ async function traiterUnFichier(fichier) {
     const { md, images } = await convertir(fichier, ext, nom, { dossierImages: sortie.dossierImages });
 
     // Détecter alerte scan PDF
-    const estScan  = ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan');
-    const resultat = { nom, nomMd: sortie.nomMd, md, images };
+    const estImage = EXTENSIONS_IMAGE_OCR.has(ext);
+    const estScan  = estImage || (ext === '.pdf' && md.includes('⚠️ Ce PDF semble être un scan'));
+    const resultat = { nom, nomMd: sortie.nomMd, md, images, date: dateLocale() };
     if (estScan) resultat.fichier = fichier;   // conservé pour un éventuel OCR
     resultats.push(resultat);
 
@@ -1775,7 +1828,8 @@ async function traiterUnFichier(fichier) {
     mettreAJourLigne(id, {
       icone:    estScan ? '⚠️' : '✅',
       statut:   estScan ? 'warn' : 'ok',
-      msg:      estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
+      msg:      estImage ? 'Image : lancez l\'OCR pour reconnaître son texte.'
+              : estScan ? 'PDF scanné : aucun texte extractible. Lancez l\'OCR pour reconnaître le texte.' : `Converti → ${sortie.nomMd}${avecImages}`,
       resultat,
       proposerOcr: estScan,
       cliquable: true,
@@ -1825,6 +1879,20 @@ function initUI() {
     if (input.files.length) { traiterFichiers(input.files); input.value = ''; }
   });
 
+  // Coller (Ctrl+V) : fichiers copiés, ou texte copié depuis Word, un mail, une page web
+  document.addEventListener('paste', e => {
+    if (e.target.closest && e.target.closest('input:not([type=checkbox]), textarea, [contenteditable]')) return;
+    const d = e.clipboardData;
+    if (!d) return;
+    const html = d.getData('text/html'), texte = d.getData('text/plain');
+    // HTML d'abord : Excel et Word joignent une image de la sélection au texte copié
+    if (html) traiterFichiers([new File([html], 'presse-papiers.html', { type: 'text/html' })]);
+    else if (d.files.length) traiterFichiers(d.files);
+    else if (texte.trim()) traiterFichiers([new File([texte], 'presse-papiers.txt', { type: 'text/plain' })]);
+    else return;
+    e.preventDefault();
+  });
+
   // Bouton ZIP (fonction fléchée : ne pas transmettre l'événement de clic comme liste)
   btnZip.addEventListener('click', () => genererZip());
 
@@ -1859,6 +1927,13 @@ function initUI() {
     const reussi = await copierTexte(apercuMdComplet);
     btn.textContent = reussi ? '✅ Copié !' : '⚠️ Copie impossible';
     setTimeout(() => { btn.textContent = '📋 Copier'; }, 2000);
+  });
+
+  // Option d'en-tête YAML, mémorisée pour ce navigateur
+  const optYaml = document.getElementById('opt-yaml');
+  try { optYaml.checked = localStorage.getItem('opt-yaml') === '1'; } catch { /* stockage indisponible */ }
+  optYaml.addEventListener('change', () => {
+    try { localStorage.setItem('opt-yaml', optYaml.checked ? '1' : '0'); } catch { /* stockage indisponible */ }
   });
 
   verifierBibliotheques();
@@ -1921,7 +1996,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
     nomSpan.classList.remove('non-cliquable');
     const { nomMd, images } = resultat;
     // resultat.md est lu au moment du clic : l'OCR peut le remplacer
-    const apercu = () => ouvrirApercu(nomMd, resultat.md);
+    const apercu = () => ouvrirApercu(nomMd, contenuMd(resultat));
 
     // Boutons d'action sous le message (construction DOM sécurisée)
     const actions = document.createElement('div');
@@ -1931,7 +2006,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
       const btnOcr = document.createElement('button');
       btnOcr.className = 'btn btn-primaire btn-petit';
       btnOcr.textContent = '🔍 Reconnaître le texte (OCR)';
-      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors-ligne.';
+      btnOcr.title = 'Reconnaissance faite sur votre appareil. Environ 5 Mo à télécharger la première fois, puis disponible hors ligne.';
       btnOcr.addEventListener('click', () => lancerOcr(li, resultat, btnOcr));
       actions.appendChild(btnOcr);
     }
@@ -1943,7 +2018,7 @@ function mettreAJourLigne(id, { icone, statut, msg, resultat, proposerOcr, cliqu
     if (images.length) btnDl.title = `${nomMd} et ses ${images.length} image(s), dans une archive`;
     btnDl.addEventListener('click', () => images.length
       ? genererZip([resultat], baseName(nomMd) + '.zip')
-      : telechargerBlob(resultat.md, nomMd));
+      : telechargerBlob(contenuMd(resultat), nomMd));
 
     const btnPrev = document.createElement('button');
     btnPrev.className = 'btn btn-secondaire btn-petit';
@@ -2014,15 +2089,26 @@ function fermerApercu() {
   apercuOverlay.hidden = true;
 }
 
+// ---- En-tête YAML (propriétés Obsidian) ----
+// Ajouté à l'export (aperçu, copie, téléchargement, ZIP) et non à la conversion :
+// cocher la case s'applique aussi aux fichiers déjà convertis, OCR compris.
+const dateLocale = () => { const d = new Date(); return `${d.getFullYear()}-${deuxChiffres(d.getMonth() + 1)}-${deuxChiffres(d.getDate())}`; };
+
+function contenuMd(r) {
+  if (!document.getElementById('opt-yaml').checked) return r.md;
+  // JSON.stringify : chaîne entre guillemets valide en YAML (« : », « # », guillemets)
+  return `---\ntitle: ${JSON.stringify(baseName(r.nomMd))}\nsource: ${JSON.stringify(r.nom)}\ndate: ${r.date}\n---\n\n${r.md}`;
+}
+
 // ---- ZIP ----
 // Archive des .md (noms déjà uniques, voir reserverSortie) et de leurs images,
 // rangées dans images/<document>/ comme les liens du Markdown l'indiquent.
 async function genererZip(liste = resultats, nomArchive = 'conversions_markdown.zip') {
   if (!liste.length) return;
   const zip = new JSZip();
-  for (const { nomMd, md, images } of liste) {
-    zip.file(nomMd, md);
-    for (const img of images || []) zip.file(img.chemin, img.data);
+  for (const r of liste) {
+    zip.file(r.nomMd, contenuMd(r));
+    for (const img of r.images || []) zip.file(img.chemin, img.data);
   }
   telechargerBlob(await zip.generateAsync({ type: 'blob' }), nomArchive);
 }
@@ -2065,6 +2151,7 @@ function verifierBibliotheques() {
   }
   // Toujours disponibles
   CONVERTISSEURS['.txt'] = convTxt;
+  for (const ext of EXTENSIONS_IMAGE_OCR) CONVERTISSEURS[ext] = convImage;
   if (window.TurndownService) {
     CONVERTISSEURS['.html'] = convHtml;
     CONVERTISSEURS['.htm']  = convHtml;

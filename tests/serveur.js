@@ -7,6 +7,7 @@
 //  /__libs__/<chemin>  → la bibliothèque cdnjs correspondante dans node_modules.
 //  /__npm__/<paquet>@<version>/<chemin> → node_modules/<paquet>/<chemin>, comme
 //                        jsDelivr, si la version installée est bien celle demandée.
+//  /__sheetjs__/<chemin> → node_modules/xlsx/<chemin> (cdn.sheetjs.com).
 //
 // Le reste du code testé est servi octet pour octet tel qu'il est publié.
 'use strict';
@@ -20,6 +21,9 @@ const PORT   = Number(process.env.PORT_TEST || 8899);
 const RACINE = path.resolve(__dirname, '..');
 const CDN    = 'https://cdnjs.cloudflare.com/ajax/libs';
 const NPM    = 'https://cdn.jsdelivr.net/npm';
+const SHEETJS = 'https://cdn.sheetjs.com/xlsx-0.20.3/package';
+// URL de bibliothèque sur l'un des CDN (même motif dans verifier-cdn.js)
+const URL_CDN = /https:\/\/(?:cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm|cdn\.sheetjs\.com\/xlsx-[^/]+\/package)\/[^'"\s]+/;
 
 // Chemin cdnjs → fichier local (versions identiques à celles d'index.html).
 const LIBS = {
@@ -27,7 +31,6 @@ const LIBS = {
   'turndown/7.1.2/turndown.min.js':       'turndown/lib/turndown.browser.umd.js',
   'pdf.js/3.11.174/pdf.min.js':           'pdfjs-dist/build/pdf.min.js',
   'pdf.js/3.11.174/pdf.worker.min.js':    'pdfjs-dist/build/pdf.worker.min.js',
-  'xlsx/0.18.5/xlsx.full.min.js':         'xlsx/dist/xlsx.full.min.js',
   'PapaParse/5.4.1/papaparse.min.js':     'papaparse/papaparse.min.js',
   'jszip/3.10.1/jszip.min.js':            'jszip/dist/jszip.min.js',
 };
@@ -42,8 +45,9 @@ const TYPES = {
   '.gz': 'application/gzip',   // servi tel quel : Tesseract décompresse lui-même
 };
 
-// Fichier local correspondant à une URL de CDN (cdnjs ou jsDelivr)
+// Fichier local correspondant à une URL de CDN (cdnjs, jsDelivr ou SheetJS)
 function fichierLocal(url) {
+  if (url.startsWith(SHEETJS + '/')) return path.join(RACINE, 'node_modules', 'xlsx', url.slice(SHEETJS.length + 1));
   if (url.startsWith(CDN + '/')) {
     const cible = LIBS[url.slice(CDN.length + 1)];
     return cible ? path.join(RACINE, 'node_modules', cible) : null;
@@ -60,7 +64,7 @@ const empreinte = f => 'sha384-' + crypto.createHash('sha384').update(fs.readFil
 // la CI compare à part les empreintes de production au CDN (verifier-cdn.js).
 function empreintesLocales(html) {
   return html.split('\n').map(ligne => {
-    const url = (ligne.match(/https:\/\/(?:cdnjs\.cloudflare\.com\/ajax\/libs|cdn\.jsdelivr\.net\/npm)\/[^'"\s]+/) || [])[0];
+    const url = (ligne.match(URL_CDN) || [])[0];
     const f = url && fichierLocal(url);
     const aEmpreinte = /sha384-[A-Za-z0-9+/=]+/.test(ligne);
     return aEmpreinte && f && fs.existsSync(f) && fs.statSync(f).isFile()
@@ -87,6 +91,13 @@ const serveur = http.createServer((req, res) => {
     return envoyer(res, 200, fs.readFileSync(path.join(RACINE, 'node_modules', cible)), TYPES['.js']);
   }
 
+  if (chemin.startsWith('/__sheetjs__/')) {
+    const dossier = path.join(RACINE, 'node_modules', 'xlsx');
+    const fichier = path.join(dossier, chemin.slice('/__sheetjs__/'.length));
+    if (!fichier.startsWith(dossier + path.sep) || !fs.existsSync(fichier)) return envoyer(res, 404, 'introuvable');
+    return envoyer(res, 200, fs.readFileSync(fichier), TYPES['.js']);
+  }
+
   if (chemin.startsWith('/__npm__/')) {
     const m = chemin.slice('/__npm__/'.length).match(/^((?:@[^/]+\/)?[^@/]+)@([^/]+)\/(.+)$/);
     if (!m) return envoyer(res, 404, 'chemin npm invalide');
@@ -110,7 +121,8 @@ const serveur = http.createServer((req, res) => {
     if (relatif === 'index.html' || relatif === 'sw.js') {
       corps = empreintesLocales(corps.toString('utf8'))
         .split(CDN).join(`http://localhost:${PORT}/__libs__`)
-        .split(NPM).join(`http://localhost:${PORT}/__npm__`);
+        .split(NPM).join(`http://localhost:${PORT}/__npm__`)
+        .split(SHEETJS).join(`http://localhost:${PORT}/__sheetjs__`);
     }
     return envoyer(res, 200, corps, TYPES[ext]);
   }
@@ -123,4 +135,4 @@ if (require.main === module) {
   serveur.listen(PORT, () => console.log(`Serveur de test : http://localhost:${PORT}/app/`));
 }
 
-module.exports = { fichierLocal, empreintesLocales };
+module.exports = { fichierLocal, empreintesLocales, URL_CDN };
