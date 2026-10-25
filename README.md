@@ -42,7 +42,7 @@ Détails techniques : voir [Sécurité](#sécurité).
 | Word | `.docx` | Titres, listes, tableaux (cellules fusionnées comprises), images (extraites en fichiers), notes de bas de page | mammoth.js + Turndown |
 | LibreOffice Writer | `.odt` | Titres, mise en forme, listes, tableaux, images, notes de bas de page | JSZip |
 | PDF (texte) | `.pdf` | Titres, paragraphes, listes ; en-têtes et pieds de page répétés retirés | PDF.js |
-| PDF scanné | `.pdf` | Texte reconnu par **OCR** (français), à la demande, sur votre appareil | PDF.js + Tesseract.js |
+| PDF scanné | `.pdf` | Texte reconnu par **OCR** (français), à la demande, sur votre appareil — document entier ou seulement les pages scannées d'un PDF texte (annexe signée, courrier numérisé) | PDF.js + Tesseract.js |
 | Tableur (Excel, LibreOffice Calc) | `.xlsx`, `.xls`, `.ods` | Une section par feuille, valeurs telles qu'affichées (dates, montants, %) | SheetJS 0.20 |
 | Données tabulaires | `.csv`, `.tsv` | Tableau ; séparateur et encodage détectés | PapaParse |
 | PowerPoint | `.pptx` | Titres, puces, tableaux, images, notes de l'orateur, dans l'ordre réel | JSZip |
@@ -74,7 +74,7 @@ Les **images** des documents sont enregistrées à côté du Markdown, dans `ima
 ## ⚠️ Limites connues
 
 - **Formats anciens (`.doc` / `.ppt`, avant 2007)** : non pris en charge. Ouvrez-les dans Word/PowerPoint et enregistrez en `.docx` / `.pptx`.
-- **OCR** : français uniquement. La qualité dépend de celle du scan ou de la photo : le texte reconnu est signalé « à relire », avec la confiance moyenne. Seuls les PDF entièrement scannés sont détectés (pas une page scannée au milieu d'un PDF texte). Sur une photo de quelques lignes, la séparation entre paragraphes est approximative.
+- **OCR** : français uniquement. La qualité dépend de celle du scan ou de la photo : le texte reconnu est signalé « à relire », avec la confiance moyenne. Une page est reconnue comme scannée si elle contient une image et presque pas de texte : une page mêlant texte et passage scanné n'est pas détectée. Sur une photo de quelques lignes, la séparation entre paragraphes est approximative.
 - **Structure des PDF** : un PDF ne contient que du texte positionné ; titres et paragraphes sont déduits de la mise en page (taille de police, interlignes). Les mises en page complexes (plusieurs colonnes, tableaux) sont restituées imparfaitement. Un mot coupé en fin de ligne garde son trait d'union (« collec-tivités ») : sans dictionnaire, impossible de le distinguer d'un mot composé (« porte-monnaie »).
 - **Images `.emf` / `.wmf`** (fréquentes dans les documents Office anciens) : extraites telles quelles, mais la plupart des lecteurs Markdown ne les affichent pas.
 - **Première visite** : une connexion internet est nécessaire pour télécharger les composants de l'outil (environ 3 Mo, une seule fois), plus environ 5 Mo au premier usage de l'OCR. Tout reste ensuite disponible hors ligne.
@@ -155,7 +155,7 @@ L'application ne demande ni compilation ni dépendance : `package.json` ne sert 
 
 ## 📅 Roadmap (idées, non engageant)
 
-- 🔭 OCR des pages scannées au milieu d'un PDF texte, et d'autres langues que le français
+- 🔭 OCR dans d'autres langues que le français
 - 🔭 Support `.epub` (e-books)
 - 🔭 Interface mobile optimisée (actuellement responsive mais perfectible)
 
