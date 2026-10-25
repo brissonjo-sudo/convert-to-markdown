@@ -348,6 +348,11 @@ function desescaperXml(s) {
     .replace(/&amp;/g,  '&');
 }
 
+// Cible exécutable (javascript:, vbscript:, data:) : le .md peut être ouvert dans
+// un éditeur (Obsidian…) où un clic l'exécuterait. Comme le navigateur, on ignore
+// espaces et caractères de contrôle dans le schéma (« java\tscript: »).
+const lienDangereux = href => /^(javascript|vbscript|data):/i.test(String(href || '').replace(/[\x00-\x20]/g, ''));
+
 // Extension de fichier d'une image d'après son type MIME (image/jpeg → jpg)
 function extensionImage(type) {
   const sous = (String(type || '').split(';')[0].split('/')[1] || '').toLowerCase();
@@ -753,7 +758,7 @@ function imageOdf(cadre, c) {
   const href  = img.attrs['xlink:href'] || '';
   const titre = premierXml(cadre, 'svg:title') || premierXml(cadre, 'svg:desc');
   const alt   = (titre ? texteXml(titre) : '').replace(/[[\]\s]+/g, ' ').trim();
-  if (/^[a-z]+:/i.test(href)) return `![${alt}](${href})`;
+  if (/^[a-z]+:/i.test(href)) return lienDangereux(href) ? '' : `![${alt}](${href})`;
   const data = c.donneesImages.get(href);
   if (!data) return '';
   if (!c.imageParChemin.has(href)) {
@@ -783,7 +788,7 @@ function enLigneOdf(n, c) {
       case 'text:span':       return encadrerMd(enLigneOdf(e, c), c.styles.get(e.attrs['text:style-name']));
       case 'text:a': {
         const t = enLigneOdf(e, c), href = e.attrs['xlink:href'];
-        return href && t.trim() ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
+        return href && t.trim() && !lienDangereux(href) ? `[${t}](${href.replace(/[\s()]/g, encodeURIComponent)})` : t;
       }
       case 'text:note': {   // note de bas de page → note Markdown [^n]
         const corps = premierXml(e, 'text:note-body');
@@ -1110,6 +1115,14 @@ function grilleTableau(table, texte) {
   return grille.map(l => Array.from({ length: l.length }, (_, i) => l[i] ?? ''));
 }
 
+// Retire les cibles exécutables (voir lienDangereux) : un lien garde son texte,
+// une image son texte alternatif.
+function neutraliserLiens(doc) {
+  for (const el of doc.querySelectorAll('[href], [src]')) {
+    for (const attr of ['href', 'src']) if (lienDangereux(el.getAttribute(attr))) el.removeAttribute(attr);
+  }
+}
+
 // .docx → Markdown (mammoth + Turndown). Les images sont extraites en fichiers
 // (ctx.dossierImages) au lieu d'être recopiées en base64 dans le Markdown, ce
 // qui le rendait illisible et pouvait le faire peser plusieurs Mo.
@@ -1132,6 +1145,7 @@ async function convDocx(ab, nom, ctx) {
 // notes Markdown natives ([^1] … [^1]: texte), comme pour les fichiers .odt.
 function notesWordEnMarkdown(html, td) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  neutraliserLiens(doc);
   const numeros = new Map();   // id de la note → numéro d'affichage
   for (const a of doc.querySelectorAll('a[href^="#footnote-"], a[href^="#endnote-"]')) {
     const id = a.getAttribute('href').slice(1);
@@ -1541,6 +1555,7 @@ async function convHtml(ab, nom, ctx) {
       img.remove();   // data: illisible → on l'omet plutôt que de recopier un bloc base64
     }
   }
+  neutraliserLiens(doc);
   return { md: creerTurndown().turndown(doc.body.innerHTML), images };
 }
 
