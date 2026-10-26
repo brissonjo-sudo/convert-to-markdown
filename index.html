@@ -2327,7 +2327,7 @@ function mettreAJourBoutonZip() {
 // ---- Aperçu ----
 // Au-delà, afficher le texte fige la page (≈ 1,5 s pour 3 Mo) : on n'en montre
 // que le début. Copier et Télécharger portent toujours sur le fichier complet.
-const APERCU_MAX_CARACTERES = 100000;
+const APERCU_MAX_CARACTERES = 1000000;   // un long roman ; ≈ 50 ms mesurés (100 ms pour 2 millions)
 let apercuMdComplet = '';
 
 function ouvrirApercu(nom, md) {
