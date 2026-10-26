@@ -33,8 +33,17 @@ test('gros fichier : aperçu tronqué, ouverture rapide, note affichée', async 
   await expect(page.locator('#apercu-note')).toBeVisible();
   await expect(page.locator('#apercu-note')).toContainText('premiers caractères');
   const affiche = await page.locator('#apercu-contenu').evaluate(el => el.textContent);
-  expect(affiche.length).toBeLessThanOrEqual(100000);
+  expect(affiche.length).toBeLessThanOrEqual(1000000);
+  expect(affiche.length).toBeGreaterThan(900000);
   expect(affiche.endsWith('|')).toBe(true);   // coupé en fin de ligne
+});
+
+test('roman entier (≈ 150 000 caractères) : aperçu complet, sans note', async ({ page }) => {
+  const taille = await convertirCsv(page, 5000);
+  expect(taille).toBeGreaterThan(140000);
+  await page.locator('.journal-actions-item button', { hasText: 'Aperçu' }).click();
+  await expect(page.locator('#apercu-note')).toBeHidden();
+  expect(await page.locator('#apercu-contenu').evaluate(el => el.textContent.length)).toBe(taille);
 });
 
 test('« Copier » copie le fichier complet, pas seulement l\'aperçu', async ({ page }) => {

@@ -1103,6 +1103,16 @@ function creerTurndown() {
 
   // Tableaux : reconstruits depuis le DOM (voir grilleTableau). Le contenu déjà
   // converti des lignes et cellules est ignoré, d'où une sortie vide pour elles.
+  // Titre sur plusieurs lignes (<br>, fréquent dans les EPUB et titres Word) : un
+  // titre Markdown tient sur une ligne, sinon la suite devient un simple paragraphe
+  td.addRule('titre', {
+    filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    replacement: (contenu, n) => {
+      const t = contenu.replace(/\s+/g, ' ').trim();
+      return t ? `\n\n${'#'.repeat(Number(n.nodeName[1]))} ${t}\n\n` : '';
+    },
+  });
+
   td.addRule('tableInterne', { filter: ['thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption'], replacement: () => '' });
   td.addRule('table', {
     filter: 'table',
@@ -2317,7 +2327,7 @@ function mettreAJourBoutonZip() {
 // ---- Aperçu ----
 // Au-delà, afficher le texte fige la page (≈ 1,5 s pour 3 Mo) : on n'en montre
 // que le début. Copier et Télécharger portent toujours sur le fichier complet.
-const APERCU_MAX_CARACTERES = 100000;
+const APERCU_MAX_CARACTERES = 1000000;   // un long roman ; ≈ 50 ms mesurés (100 ms pour 2 millions)
 let apercuMdComplet = '';
 
 function ouvrirApercu(nom, md) {
