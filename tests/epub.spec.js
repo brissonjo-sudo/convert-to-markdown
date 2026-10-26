@@ -42,6 +42,14 @@ test('chapitres dans l\'ordre de lecture, titres sous celui du livre, image extr
   expect(r.resultats[0].images).toEqual([{ chemin: 'images/guide/image1.png', octets: 70 }]);
 });
 
+test('titre de chapitre sur deux lignes (<br/>, comme Calibre) : un seul titre Markdown', async ({ page }) => {
+  const md = await page.evaluate(async () => {
+    await traiterFichiers([Fab.texte('titres.html', '<h1>III<br/><br/>L’AFFÛT DANS LA NUIT</h1><p>Immobile.</p>')]);
+    return resultats[0].md;
+  });
+  expect(md).toBe('# III L’AFFÛT DANS LA NUIT\n\nImmobile.');
+});
+
 test('EPUB sans description du livre (content.opf) : erreur claire', async ({ page }) => {
   const r = await convertirEpub(page, { sansOpf: true });
   expect(r.journal[0].statut).toBe('err');
