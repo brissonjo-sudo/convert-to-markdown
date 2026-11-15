@@ -110,3 +110,23 @@ test('moteur OCR inaccessible : message clair, nouvel essai possible', async ({ 
   await expect(bouton).toBeEnabled();
   expect(await page.evaluate(() => resultats[0].md)).toContain('semble être un scan');
 });
+
+// Données Tesseract fabriquées : une ligne par entrée [confiance, texte]
+const donneesOcr = lignes => ({ blocks: [{ paragraphs: [{ lines: lignes.map(([confidence, text], i) => ({
+  confidence, text, bbox: { x0: 0, x1: 500, y0: i * 20, y1: i * 20 + 12 } })) }] }] });
+
+test('captures d\'écran : lignes illisibles (confiance < 50 %) retirées', async ({ page }) => {
+  await ouvrirApp(page);
+  const r = await page.evaluate(d => { const l = lignesOcr(d); return { textes: l.map(x => x.texte), retirees: l.retirees }; },
+    donneesOcr([[95, 'Pour modifier votre application, cliquez sur le bouton.'], [21, '©) ere Tres == IPTENEASSEE'],
+                [58, '+ Applications'], [11, 'late acrmceepr ee em era']]));
+  expect(r.textes).toEqual(['Pour modifier votre application, cliquez sur le bouton.', '+ Applications']);
+  expect(r.retirees).toBe(2);
+});
+
+test('scan dégradé (lignes douteuses majoritaires) : tout le texte est gardé', async ({ page }) => {
+  await ouvrirApp(page);
+  const r = await page.evaluate(d => { const l = lignesOcr(d); return { n: l.length, retirees: l.retirees }; },
+    donneesOcr([[42, 'Le maire de la commune arrête que le stationnement'], [38, 'est interdit rue de la République.'], [90, 'Article 2']]));
+  expect(r).toEqual({ n: 3, retirees: 0 });
+});

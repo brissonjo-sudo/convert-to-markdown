@@ -1506,15 +1506,25 @@ function chargerTesseract() {
 // (colonnes) ; ses blocs servent de séparations franches. Repère image (y vers le
 // bas) → repère PDF (y vers le haut) : y = −ligne de base. Taille : hauteur de
 // rangée (police), indépendante des jambages présents dans la ligne.
+// Lignes sous OCR_CONFIANCE_MIN : texte lu dans une capture d'écran (charabia),
+// retirées. Mesuré sur un guide de 42 pages : aucun paragraphe sous ce seuil, au
+// plus 36 % du texte d'une page. Si les lignes douteuses portent plus de la moitié
+// du texte, c'est un scan dégradé : tout est gardé. `retirees` : lignes ôtées.
+const OCR_CONFIANCE_MIN = 50;
 function lignesOcr(data) {
-  return (data.blocks || []).flatMap((b, bloc) => (b.paragraphs || []).flatMap(p => p.lines || []).map(l => ({
+  const lignes = (data.blocks || []).flatMap((b, bloc) => (b.paragraphs || []).flatMap(p => p.lines || []).map(l => ({
     texte: l.text.replace(/\s+/g, ' ').trim(),
     x: l.bbox.x0,
     fin: l.bbox.x1,
     y: -(l.baseline ? (l.baseline.y0 + l.baseline.y1) / 2 : l.bbox.y1),
     taille: (l.rowAttributes && l.rowAttributes.rowHeight) || (l.bbox.y1 - l.bbox.y0),
     bloc,
+    douteuse: l.confidence < OCR_CONFIANCE_MIN,
   }))).filter(l => l.texte);
+  const car = ls => ls.reduce((n, l) => n + l.texte.length, 0);
+  const gardees = car(lignes.filter(l => l.douteuse)) * 2 > car(lignes) ? lignes : lignes.filter(l => !l.douteuse);
+  gardees.retirees = lignes.length - gardees.length;
+  return gardees;
 }
 
 // Photos dont le texte s'obtient par OCR, comme un PDF scanné
@@ -1542,6 +1552,7 @@ async function ocrDocument(fichier, nom, progression) {
       langPath: OCR.langues,
     });
     const pages = [], confiances = [], numerosOcr = [];
+    let retirees = 0;
     const canvas = document.createElement('canvas');
     for (let i = 1; i <= nbPages; i++) {
       const page = pdf && await pdf.getPage(i);
@@ -1562,6 +1573,7 @@ async function ocrDocument(fichier, nom, progression) {
       else { ctx2d.drawImage(image, 0, 0, canvas.width, canvas.height); image.close(); }
       const { data } = await worker.recognize(canvas, {}, { blocks: true });
       const lignes = lignesOcr(data);
+      retirees += lignes.retirees;
       if (p) {
         // Pixels → repère du PDF, celui des pages texte voisines (tailles et
         // positions comparables pour titres, paragraphes, en-têtes répétés).
@@ -1584,7 +1596,8 @@ async function ocrDocument(fichier, nom, progression) {
     const confiance = Math.round(confiances.reduce((s, c) => s + c, 0) / confiances.length);
     const portee = numerosOcr.length === nbPages ? 'Texte obtenu' : `${libellePages(numerosOcr)} : texte obtenu`;
     const blocs = [`# ${baseName(nom)}`,
-      `> ${portee} par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.`];
+      `> ${portee} par reconnaissance optique (OCR), confiance moyenne ${confiance} % : à relire, des erreurs sont possibles.` +
+        (retirees ? ` ${retirees} ligne${retirees > 1 ? 's' : ''} illisible${retirees > 1 ? 's' : ''} (captures d'écran) retirée${retirees > 1 ? 's' : ''}.` : '')];
     return [...blocs, ...blocsPages(pages)].join('\n\n') + '\n';
   } finally {
     if (worker) await worker.terminate();
