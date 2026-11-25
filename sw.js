@@ -49,7 +49,9 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const noms = await caches.keys();
-    await Promise.all(noms.filter(n => n !== VERSION).map(n => caches.delete(n)));
+    // Origine github.io partagée avec d'autres outils (my-personal-digital-space) :
+    // ne supprimer que nos anciennes versions, jamais les caches des autres.
+    await Promise.all(noms.filter(n => n.startsWith('conv-md-') && n !== VERSION).map(n => caches.delete(n)));
     await self.clients.claim();
   })());
 });

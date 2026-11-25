@@ -32,6 +32,16 @@ test('hors-ligne après la première visite', async ({ page, context }) => {
   expect(r.resultats[0].md).toContain('| 1 | 2 |');
 });
 
+test('activation : seules nos anciennes versions de cache sont purgées', async ({ page }) => {
+  // Même origine que github.io/my-personal-digital-space : ses caches (mpds-*) doivent survivre
+  await page.goto('/app/icone.svg');
+  await page.evaluate(async () => { await caches.open('mpds-v1'); await caches.open('conv-md-v1'); });
+  await ouvrirApp(page);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(async () => !(await caches.has('conv-md-v1')));
+  expect(await page.evaluate(() => caches.has('mpds-v1'))).toBe(true);
+});
+
 test('une page d\'erreur visitée ne remplace pas l\'application hors-ligne', async ({ page, context }) => {
   await ouvrirApp(page);
   await page.waitForFunction(() => navigator.serviceWorker.controller);
